@@ -64,7 +64,6 @@ Adjust these settings in `safari_pinned_tab_automation.py`:
 ## 🛡️ Safety Features
 
 - **Emergency Stop**: Move mouse to top-left corner of screen
-- **Keyboard Stop**: Press Ctrl+C in terminal
 - **Failsafe**: PyAutoGUI's built-in protection
 - **User Confirmation**: Must press ENTER to start
 
