@@ -2,6 +2,10 @@
 
 A Python automation script for macOS that efficiently manages Safari pinned tabs. Perfect for bulk operations when you need to unpin or close multiple pinned tabs quickly.
 
+## 💡 Why This Exists
+
+Safari doesn't support batch unpin natively, and unpinning a tab causes remaining pinned tabs to shift position, breaking forward navigation. Simple sequential automation (right-click, unpin, move to next) fails because after each unpin, the tabs slide left and your cursor lands on the wrong tab. Closing pinned tabs has a similar issue — the context menu option count differs from unpinning, so the same automation can't handle both without accounting for that. This script solves these quirks with bidirectional navigation (left-to-right lets tabs auto-shift toward the cursor, right-to-left manually moves to each next tab) and separate handling for unpin vs. close operations.
+
 ## 🚀 Features
 
 - **Dual Operations**: Support for both unpinning and closing pinned tabs
