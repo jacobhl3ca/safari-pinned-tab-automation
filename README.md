@@ -52,7 +52,7 @@ python safari_pinned_tab_automation.py
    - `1` for Unpin Tab
    - `2` for Close Tab
 3. Choose direction:
-   - `1` for <-- Right to left
+   - `1` for <-- Right to left (Recommended)
    - `2` for --> Left to right
 4. Position your mouse on the first pinned tab
 5. Press ENTER to start
