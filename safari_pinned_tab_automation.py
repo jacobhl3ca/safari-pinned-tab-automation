@@ -27,7 +27,7 @@ def get_user_options():
     
     # Get direction
     while True:
-        direction = input("Choose direction: (1) <-- Right to left (2) --> Left to right: ").strip()
+        direction = input("Choose direction: (1) <-- Right to left (Recommended) (2) --> Left to right: ").strip()
         if direction in ['1', '2']:
             direction_type = 'right_to_left' if direction == '1' else 'left_to_right'
             break
