@@ -120,7 +120,9 @@ def main():
             print(f"Cycle {cycle} done")
             
     except KeyboardInterrupt:
-        print("\nStopped by user")
+        print("\n✅ Stopped by user (Ctrl+C)")
+    except pyautogui.FailSafeException:
+        print("\n✅ Stopped — mouse moved to corner of screen (fail-safe triggered)")
     except Exception as e:
         print(f"Error: {e}")
 
