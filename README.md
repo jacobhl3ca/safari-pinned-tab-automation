@@ -11,6 +11,7 @@ Safari doesn't support batch unpin natively, and unpinning a tab causes remainin
 - **Dual Operations**: Support for both unpinning and closing pinned tabs
 - **Bidirectional Navigation**: Work left-to-right or right-to-left
 - **Smart Movement**: Automatically handles tab position shifts during operations
+- **Auto-Stop at Edge**: Right-to-left mode halts automatically when the leftmost pinned tab is reached
 - **User-Friendly Interface**: Clear prompts and visual indicators
 - **Fast Execution**: Optimized timing for quick tab management
 
@@ -69,6 +70,7 @@ Adjust these settings in `safari_pinned_tab_automation.py`:
 
 - **Emergency Stop**: Move mouse to top-left corner of screen
 - **Failsafe**: PyAutoGUI's built-in protection
+- **Auto-Stop at Edge**: In right-to-left mode, the loop exits when the next move would go off-screen
 - **User Confirmation**: Must press ENTER to start
 
 ## 📦 Requirements
@@ -90,6 +92,9 @@ Adjust these settings in `safari_pinned_tab_automation.py`:
 
 **Stop Method**:
 - **Mouse Stop**: Move mouse to top-left corner of screen
+
+**Auto-Stop Triggered Early**:
+- If the loop stops before reaching your leftmost tab, your `tab_distance` may be wider than the actual spacing — lower it in the script
 
 ## 📄 License
 
