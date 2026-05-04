@@ -113,8 +113,8 @@ def main():
             else:
                 # Normal movement for right_to_left
                 new_x = current_x - tab_distance
-                if new_x < tab_distance:
-                    print(f"\n✅ Reached leftmost edge (next position {new_x} < {tab_distance}px) — stopping")
+                if new_x < 0:
+                    print(f"\n✅ Reached leftmost edge (next position {new_x}px is off-screen) — stopping")
                     break
                 print(f"Move left to ({new_x}, {current_y})")
                 pyautogui.moveTo(new_x, current_y, duration=0.1)
