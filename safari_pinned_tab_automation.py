@@ -13,7 +13,7 @@ import pyautogui
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.1  # Reduced pause for faster execution
 
-def get_user_options():
+def get_user_options() -> tuple[str, str]:
     print("=== Safari Pinned Tab Options ===")
     print()
     
@@ -44,7 +44,7 @@ def get_user_options():
     
     return operation_type, direction_type
 
-def main():
+def main() -> None:
     print()
     print("Starting FAST Safari Pinned Tabs Automation...")
     print()
@@ -127,7 +127,7 @@ def main():
     except pyautogui.FailSafeException:
         print("\n✅ Stopped — mouse moved to corner of screen (fail-safe triggered)")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error ({type(e).__name__}): {e}")
 
 if __name__ == "__main__":
     main()
