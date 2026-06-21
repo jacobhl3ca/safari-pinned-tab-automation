@@ -14,6 +14,12 @@ pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.1  # Reduced pause for faster execution
 
 def get_user_options() -> tuple[str, str]:
+    """Prompt the user for operation type and direction, returning both as strings.
+
+    Returns:
+        A tuple of (operation_type, direction_type) where operation_type is
+        'unpin' or 'close', and direction_type is 'right_to_left' or 'left_to_right'.
+    """
     print("=== Safari Pinned Tab Options ===")
     print()
     
@@ -45,6 +51,12 @@ def get_user_options() -> tuple[str, str]:
     return operation_type, direction_type
 
 def main() -> None:
+    """Run the interactive automation loop for managing Safari pinned tabs.
+
+    Collects user preferences, waits for confirmation, then repeatedly
+    right-clicks each pinned tab and selects unpin or close until the user
+    interrupts or the loop reaches the screen edge (right-to-left mode only).
+    """
     print()
     print("Starting FAST Safari Pinned Tabs Automation...")
     print()
