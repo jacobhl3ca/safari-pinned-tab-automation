@@ -13,6 +13,8 @@ import pyautogui
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.1  # Reduced pause for faster execution
 
+TAB_DISTANCE = 36  # pixels between adjacent Safari pinned tabs; adjust to match your display
+
 def get_user_options() -> tuple[str, str]:
     """Prompt the user for operation type and direction, returning both as strings.
 
@@ -79,7 +81,6 @@ def main() -> None:
         print("*** UNPINNING TABS ***")
     
     cycle = 0
-    tab_distance = 36  # Distance between Safari pinned tabs
     
     try:
         while True:
@@ -124,7 +125,7 @@ def main() -> None:
                 print("Not moving - tab action shifts remaining tabs left automatically")
             else:
                 # Normal movement for right_to_left
-                new_x = current_x - tab_distance
+                new_x = current_x - TAB_DISTANCE
                 if new_x < 0:
                     print(f"\n✅ Reached leftmost edge (next position {new_x}px is off-screen) — stopping")
                     break
