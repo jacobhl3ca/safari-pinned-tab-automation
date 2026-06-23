@@ -220,9 +220,25 @@ class TidyTabApp(rumps.App):
         if self._idle_icon is None:           # classic 📌 emoji
             self.icon = None
             self.title = self._idle_title
-        else:                                 # tinted pin image at ICON_DIM size
+        else:                                 # tinted pin image (resized to ICON_DIM)
             self.title = self._idle_title
-            self.set_icon(self._idle_icon, dimensions=ICON_DIM, template=self._idle_template)
+            self.template = self._idle_template
+            self.icon = self._idle_icon
+            self._resize_menubar_icon()
+
+    def _resize_menubar_icon(self):
+        # rumps' App.icon always renders the image at 20×20pt; shrink the NSImage to
+        # ICON_DIM and refresh the live status item so the menu-bar pin isn't oversized.
+        try:
+            img = self._icon_nsimage
+            if img is not None:
+                img.setSize_(ICON_DIM)
+                nsapp = getattr(self, "_nsapp", None)
+                item = getattr(nsapp, "nsstatusitem", None) if nsapp is not None else None
+                if item is not None:
+                    item.setImage_(img)
+        except Exception:
+            pass
 
     def _set_icon(self, sender):
         for it in self._icon_items:
