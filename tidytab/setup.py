@@ -20,12 +20,14 @@ APP_NAME = "TidyTab"
 # The script that becomes the app's entry point.
 APP = ["tidytab.py"]
 
-# No bundled data files needed (the menu-bar glyph is a literal emoji title).
-DATA_FILES = []
+# Menu-bar icon images bundled into Resources (white default + red option).
+DATA_FILES = ["menubar_icon.png", "menubar_icon_red.png"]
 
 OPTIONS = {
     # argv_emulation interferes with input synthesis / event handling; leave off.
     "argv_emulation": False,
+    # App (Dock/Finder) icon.
+    "iconfile": "TidyTab.icns",
     "plist": {
         "CFBundleName": APP_NAME,
         "CFBundleDisplayName": APP_NAME,
@@ -42,8 +44,8 @@ OPTIONS = {
             "(System Settings → Privacy & Security → Accessibility)."
         ),
     },
-    # rumps + pyautogui are the core packages py2app must bundle.
-    "packages": ["rumps", "pyautogui"],
+    # rumps + pyautogui + the Accessibility framework py2app must bundle.
+    "packages": ["rumps", "pyautogui", "ApplicationServices"],
     # Exclude pyautogui's optional MouseInfo GUI helper (TidyTab never calls it).
     # MouseInfo pulls in `rubicon-objc`, which is a NAMESPACE package — py2app's
     # legacy `imp.find_module`-based bootstrap collector can't resolve it and dies
