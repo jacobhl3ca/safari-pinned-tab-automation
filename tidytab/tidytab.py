@@ -171,8 +171,8 @@ def _res(name):
 
 class TidyTabApp(rumps.App):
     def __init__(self):
-        # Default look = the classic 📌 emoji in the menu bar.
-        super().__init__(APP_NAME, title="📌", quit_button=None)
+        # Default look = white pin (template image) in the menu bar.
+        super().__init__(APP_NAME, icon=_res("menubar_white.png"), template=True, quit_button=None)
 
         self._operation = "unpin"            # "unpin" | "close"
         self._mode = ("auto", [])            # set by _run before the worker starts
@@ -181,10 +181,10 @@ class TidyTabApp(rumps.App):
         self._space_monitor = None
         self._watchdog = None
 
-        # Idle menu-bar appearance (restored after a run); default = classic emoji.
-        self._idle_title = "📌"
-        self._idle_icon = None
-        self._idle_template = False
+        # Idle menu-bar appearance (restored after a run); default = white pin.
+        self._idle_title = ""
+        self._idle_icon = _res("menubar_white.png")
+        self._idle_template = True
 
         # Operation submenu (Unpin default)
         self._op_unpin = rumps.MenuItem("Unpin tabs", callback=self._set_unpin)
@@ -201,7 +201,7 @@ class TidyTabApp(rumps.App):
             it = rumps.MenuItem(label, callback=self._set_icon)
             self._icon_items.append(it)
             color_menu.add(it)
-        self._icon_items[0].state = True  # Classic 📌
+        self._icon_items[1].state = True  # White (default)
 
         self.menu = [
             op_menu,
