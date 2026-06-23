@@ -2,17 +2,16 @@
 """
 TidyTab — a macOS menu-bar app that bulk unpins or closes Safari pinned tabs.
 
-It tries to auto-locate the pinned tabs via the macOS Accessibility API and act on
-each one (no need to position the mouse). If it can't read the tabs, it falls back
-to the original "hover the rightmost pinned tab" sweep.
+It auto-locates the pinned tabs via the macOS Accessibility API, shows you a
+confirmation ("Unpin N pinned tabs?"), and on OK acts on each one — no need to
+position the mouse. If it can't read the tabs, it offers a manual fallback.
 
 ⚠️  Requires Accessibility permission (System Settings → Privacy & Security →
-    Accessibility). Without it, macOS silently drops the synthesized clicks AND the
-    app can't read Safari's tabs — so TidyTab checks/prompts for it up front.
+    Accessibility). Without it macOS blocks the app from reading/controlling Safari.
 
-Menu bar: a white pin icon by default (switchable to red). While a run is in
-progress the menu bar shows "Space to stop" and the Space key (or slamming the
-mouse into a screen corner) aborts.
+Menu bar: the classic 📌 pushpin by default; the "Icon color" submenu can switch
+it to a white/red/… tinted pin. While a run is in progress the menu bar shows
+"Space to stop" — Space (or slamming the mouse to a screen corner) aborts.
 """
 
 import os
@@ -25,7 +24,7 @@ import pyautogui
 from AppKit import NSEvent, NSWorkspace
 try:
     from AppKit import NSEventMaskKeyDown
-except ImportError:  # older pyobjc constant name / fallback
+except ImportError:
     NSEventMaskKeyDown = 1 << 10
 
 from ApplicationServices import (
@@ -43,25 +42,36 @@ from ApplicationServices import (
 APP_NAME = "TidyTab"
 
 # --- pyautogui safety ----------------------------------------------------------
-pyautogui.FAILSAFE = True   # slam mouse into a screen corner to abort instantly
+pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.1
 
-TAB_DISTANCE = 36           # px between pinned tabs (manual fallback sweep)
-COUNTDOWN_SECONDS = 3       # manual-fallback countdown
-SPACE_KEYCODE = 49          # macOS virtual key code for the spacebar
+TAB_DISTANCE = 36
+COUNTDOWN_SECONDS = 3        # manual-fallback countdown
+SPACE_KEYCODE = 49
 PINNED_MAX_WIDTH = 72       # a Safari tab this narrow (favicon-only) = pinned
+
+# Menu-bar "Icon color" options → bundled silhouette pngs (None = classic emoji).
+CLASSIC = "Classic 📌"
+COLOR_FILES = {
+    "White": ("menubar_white.png", True),    # template → adapts to the menu bar
+    "Red": ("menubar_red.png", False),
+    "Orange": ("menubar_orange.png", False),
+    "Yellow": ("menubar_yellow.png", False),
+    "Green": ("menubar_green.png", False),
+    "Blue": ("menubar_blue.png", False),
+    "Purple": ("menubar_purple.png", False),
+    "Pink": ("menubar_pink.png", False),
+}
 
 
 # ============================================================================ #
 # Accessibility helpers
 # ============================================================================ #
 def accessibility_trusted():
-    """True if this process may use the Accessibility API / synthesize input."""
     return bool(AXIsProcessTrusted())
 
 
 def prompt_accessibility():
-    """Ask macOS to show the 'grant Accessibility' prompt for this app."""
     try:
         return bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}))
     except Exception:
@@ -76,7 +86,7 @@ def open_accessibility_settings():
 
 
 # ============================================================================ #
-# Accessibility-API tab finder (read-only; returns pinned-tab centre points)
+# Accessibility-API tab finder (read-only)
 # ============================================================================ #
 def _ax_attr(element, name):
     err, value = AXUIElementCopyAttributeValue(element, name, None)
@@ -105,7 +115,6 @@ def _safari_pid():
 
 
 def _collect_radio_buttons(element, out, depth=0, max_depth=14):
-    """Depth-first collect of AXRadioButton elements (Safari tabs are these)."""
     if depth > max_depth:
         return
     try:
@@ -118,12 +127,7 @@ def _collect_radio_buttons(element, out, depth=0, max_depth=14):
 
 
 def find_pinned_tab_centers():
-    """
-    Return screen-coordinate centres of Safari's pinned tabs, left-to-right.
-
-    Pinned tabs are the leftmost contiguous run of favicon-only (narrow) tabs.
-    Returns [] if Safari isn't readable — the caller then falls back to manual.
-    """
+    """Screen-coordinate centres of Safari's pinned tabs (left→right), or []."""
     pid = _safari_pid()
     if not pid:
         return []
@@ -147,7 +151,7 @@ def find_pinned_tab_centers():
     if not tabs:
         return []
 
-    tabs.sort(key=lambda t: t[0])  # by x (left → right)
+    tabs.sort(key=lambda t: t[0])
     centers = []
     for x, y, w, h in tabs:
         if w <= PINNED_MAX_WIDTH:
@@ -161,27 +165,28 @@ def find_pinned_tab_centers():
 # Menu-bar app
 # ============================================================================ #
 def _res(name):
-    """Path to a bundled resource (works in dev and inside the py2app bundle)."""
     base = os.environ.get("RESOURCEPATH", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, name)
 
 
 class TidyTabApp(rumps.App):
     def __init__(self):
-        super().__init__(
-            APP_NAME,
-            icon=_res("menubar_icon.png"),
-            template=True,            # white on the dark menu bar by default
-            quit_button=None,
-        )
+        # Default look = the classic 📌 emoji in the menu bar.
+        super().__init__(APP_NAME, title="📌", quit_button=None)
 
         self._operation = "unpin"            # "unpin" | "close"
+        self._mode = ("auto", [])            # set by _run before the worker starts
         self._stop_flag = threading.Event()
         self._worker = None
         self._space_monitor = None
         self._watchdog = None
 
-        # Operation submenu (mutually exclusive, default Unpin)
+        # Idle menu-bar appearance (restored after a run); default = classic emoji.
+        self._idle_title = "📌"
+        self._idle_icon = None
+        self._idle_template = False
+
+        # Operation submenu (Unpin default)
         self._op_unpin = rumps.MenuItem("Unpin tabs", callback=self._set_unpin)
         self._op_close = rumps.MenuItem("Close tabs", callback=self._set_close)
         self._op_unpin.state = True
@@ -189,13 +194,14 @@ class TidyTabApp(rumps.App):
         op_menu.add(self._op_unpin)
         op_menu.add(self._op_close)
 
-        # Icon-color submenu (White default, Red option)
-        self._ic_white = rumps.MenuItem("White", callback=self._set_icon_white)
-        self._ic_red = rumps.MenuItem("Red", callback=self._set_icon_red)
-        self._ic_white.state = True
+        # Icon-color submenu: Classic 📌 (default) + tinted pins
         color_menu = rumps.MenuItem("Icon color")
-        color_menu.add(self._ic_white)
-        color_menu.add(self._ic_red)
+        self._icon_items = []
+        for label in [CLASSIC] + list(COLOR_FILES.keys()):
+            it = rumps.MenuItem(label, callback=self._set_icon)
+            self._icon_items.append(it)
+            color_menu.add(it)
+        self._icon_items[0].state = True  # Classic 📌
 
         self.menu = [
             op_menu,
@@ -209,7 +215,6 @@ class TidyTabApp(rumps.App):
             rumps.MenuItem("Quit", callback=self._quit),
         ]
 
-        # On launch, nudge for Accessibility if it isn't granted yet.
         self._launch_check = rumps.Timer(self._launch_accessibility_check, 1.0)
         self._launch_check.start()
 
@@ -218,8 +223,7 @@ class TidyTabApp(rumps.App):
         timer.stop()
         if not accessibility_trusted():
             rumps.notification(
-                APP_NAME,
-                "Accessibility permission needed",
+                APP_NAME, "Accessibility permission needed",
                 "Enable TidyTab in Privacy & Security → Accessibility so it can "
                 "read and control Safari's tabs.",
             )
@@ -238,15 +242,21 @@ class TidyTabApp(rumps.App):
         self._op_unpin.state, self._op_close.state = False, True
 
     # ---- icon color -------------------------------------------------------- #
-    def _set_icon_white(self, _s):
-        self.template = True
-        self.icon = _res("menubar_icon.png")
-        self._ic_white.state, self._ic_red.state = True, False
+    def _apply_idle(self):
+        self.template = self._idle_template
+        self.icon = self._idle_icon
+        self.title = self._idle_title
 
-    def _set_icon_red(self, _s):
-        self.template = False
-        self.icon = _res("menubar_icon_red.png")
-        self._ic_white.state, self._ic_red.state = False, True
+    def _set_icon(self, sender):
+        for it in self._icon_items:
+            it.state = (it is sender)
+        if sender.title == CLASSIC:
+            self._idle_title, self._idle_icon, self._idle_template = "📌", None, False
+        else:
+            fname, template = COLOR_FILES[sender.title]
+            self._idle_title, self._idle_icon, self._idle_template = "", _res(fname), template
+        if not (self._worker and self._worker.is_alive()):
+            self._apply_idle()
 
     # ---- run / stop -------------------------------------------------------- #
     def _run(self, _sender):
@@ -264,6 +274,37 @@ class TidyTabApp(rumps.App):
             )
             return
 
+        op_label = "Close" if self._operation == "close" else "Unpin"
+        try:
+            centers = find_pinned_tab_centers()
+        except Exception:
+            centers = []
+
+        # Confirm BEFORE doing anything — never just-start.
+        if centers:
+            ok = rumps.alert(
+                title=f"{op_label} {len(centers)} pinned tab(s)?",
+                message=(f"TidyTab will {op_label.lower()} {len(centers)} pinned "
+                         "tab(s) in Safari.\n\nPress Space or move the mouse to a "
+                         "screen corner to stop mid-run."),
+                ok=op_label, cancel="Cancel",
+            )
+            if ok != 1:
+                return
+            self._mode = ("auto", centers)
+        else:
+            ok = rumps.alert(
+                title="No pinned tabs detected",
+                message=("TidyTab couldn't read Safari's pinned tabs — make sure a "
+                         "Safari window is frontmost (and that TidyTab has "
+                         "Accessibility permission).\n\nRun in manual mode instead? "
+                         "You'll hover the rightmost pinned tab and it sweeps left."),
+                ok="Manual run", cancel="Cancel",
+            )
+            if ok != 1:
+                return
+            self._mode = ("manual", [])
+
         self._stop_flag.clear()
         self._begin_running_ui()
         self._worker = threading.Thread(target=self._automation_loop, daemon=True)
@@ -277,7 +318,7 @@ class TidyTabApp(rumps.App):
         self._stop_space_monitor()
         rumps.quit_application()
 
-    # ---- running-state UI (menu bar hint + Space monitor + watchdog) ------- #
+    # ---- running-state UI -------------------------------------------------- #
     def _begin_running_ui(self):
         self.title = "  Space to stop"
         self._start_space_monitor()
@@ -286,14 +327,13 @@ class TidyTabApp(rumps.App):
             self._watchdog.start()
 
     def _end_running_ui(self):
-        self.title = ""
+        self._apply_idle()                  # restore 📌 / chosen color
         self._stop_space_monitor()
         if self._watchdog is not None:
             self._watchdog.stop()
             self._watchdog = None
 
     def _check_done(self, _timer):
-        # Runs on the main thread; clean up the UI once the worker finishes.
         if self._worker is None or not self._worker.is_alive():
             self._end_running_ui()
 
@@ -319,7 +359,6 @@ class TidyTabApp(rumps.App):
 
     # ---- the work ---------------------------------------------------------- #
     def _tidy_one(self, x, y, operation):
-        """Unpin/close a single tab whose centre is (x, y)."""
         pyautogui.moveTo(x, y, duration=0.08)
         pyautogui.click()
         time.sleep(0.1)
@@ -334,23 +373,14 @@ class TidyTabApp(rumps.App):
         time.sleep(0.15)
 
     def _automation_loop(self):
+        mode, centers = self._mode
         operation = self._operation
         try:
-            centers = find_pinned_tab_centers()
-        except Exception:
-            centers = []
-
-        try:
-            if centers:
-                rumps.notification(
-                    APP_NAME,
-                    f"Tidying {len(centers)} pinned tab(s)",
-                    "Press Space (or slam the mouse to a corner) to stop.",
-                )
-                time.sleep(1.0)  # brief grace so the user can abort
+            if mode == "auto":
+                time.sleep(0.4)  # brief; the user already confirmed
                 done = 0
-                # Act rightmost-first: removing a tab never shifts the tabs to
-                # its LEFT, so the remaining cached centres stay valid.
+                # Act rightmost-first: removing a tab never shifts the tabs to its
+                # LEFT, so the remaining cached centres stay valid.
                 for x, y in reversed(centers):
                     if self._stop_flag.is_set():
                         break
@@ -364,14 +394,12 @@ class TidyTabApp(rumps.App):
         except pyautogui.FailSafeException:
             rumps.notification(APP_NAME, "Stopped",
                                "Fail-safe triggered (mouse moved to a corner).")
-        except Exception as exc:  # never crash the menu bar
+        except Exception as exc:
             rumps.notification(APP_NAME, "Error", str(exc))
 
     def _manual_fallback(self, operation):
-        """Old behaviour: user hovers the rightmost pinned tab; sweep left."""
         rumps.notification(
-            APP_NAME,
-            "Couldn't auto-detect pinned tabs",
+            APP_NAME, "Manual mode",
             "Hover the RIGHTMOST pinned tab — starting in "
             f"{COUNTDOWN_SECONDS}s. Press Space or hit a corner to stop.",
         )

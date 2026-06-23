@@ -20,8 +20,13 @@ APP_NAME = "TidyTab"
 # The script that becomes the app's entry point.
 APP = ["tidytab.py"]
 
-# Menu-bar icon images bundled into Resources (white default + red option).
-DATA_FILES = ["menubar_icon.png", "menubar_icon_red.png"]
+# Menu-bar pin silhouettes bundled into Resources (white + color options;
+# the default look is the classic 📌 emoji set as the app title, no image).
+DATA_FILES = [
+    "menubar_white.png", "menubar_red.png", "menubar_orange.png",
+    "menubar_yellow.png", "menubar_green.png", "menubar_blue.png",
+    "menubar_purple.png", "menubar_pink.png",
+]
 
 OPTIONS = {
     # argv_emulation interferes with input synthesis / event handling; leave off.
