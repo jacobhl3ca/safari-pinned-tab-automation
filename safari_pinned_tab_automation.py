@@ -63,26 +63,26 @@ def main() -> None:
     print("Starting FAST Safari Pinned Tabs Automation...")
     print()
     
-    # Get user options
-    operation_type, direction_type = get_user_options()
-    
-    # Wait for user to be ready
-    input("Press ENTER when you're ready to start (after positioning your mouse)...")
-    
-    # Short countdown
-    print("Starting in 2...")
-    time.sleep(1)
-    print("1...")
-    time.sleep(1)
-    
-    if operation_type == 'close':
-        print("*** CLOSING PINNED TABS ***")
-    else:  # unpin
-        print("*** UNPINNING TABS ***")
-    
-    cycle = 0
-    
     try:
+        # Get user options
+        operation_type, direction_type = get_user_options()
+
+        # Wait for user to be ready
+        input("Press ENTER when you're ready to start (after positioning your mouse)...")
+
+        # Short countdown
+        print("Starting in 2...")
+        time.sleep(1)
+        print("1...")
+        time.sleep(1)
+
+        if operation_type == 'close':
+            print("*** CLOSING PINNED TABS ***")
+        else:  # unpin
+            print("*** UNPINNING TABS ***")
+
+        cycle = 0
+
         while True:
             cycle += 1
             print(f"\n--- Cycle {cycle} ---")
