@@ -43,11 +43,12 @@ APP_NAME = "TidyTab"
 
 # --- pyautogui safety ----------------------------------------------------------
 pyautogui.FAILSAFE = True
-pyautogui.PAUSE = 0.1
+pyautogui.PAUSE = 0.05      # faster per-call pause (safe: the loop self-corrects/stops)
 
 TAB_DISTANCE = 36
 COUNTDOWN_SECONDS = 3
 SPACE_KEYCODE = 49
+ESC_KEYCODE = 53
 PINNED_MAX_WIDTH = 72
 ICON_DIM = (16, 18)         # menu-bar icon point size (a touch taller, a touch less wide)
 
@@ -90,6 +91,67 @@ def activate_safari():
     """Bring Safari to the front (even from another Space) so detection and any
     synthesized clicks land on Safari — never on a random window/app."""
     os.system("osascript -e 'tell application \"Safari\" to activate' >/dev/null 2>&1")
+
+
+def safari_window_on_screen():
+    """True iff Safari has a real window on the CURRENT Space (on-screen).
+
+    If Safari is on another Desktop/Space, `activate` may not switch to it (depends
+    on a Mission Control pref), so we refuse to click rather than click blindly.
+    """
+    try:
+        from Quartz import (
+            CGWindowListCopyWindowInfo,
+            kCGWindowListOptionOnScreenOnly,
+            kCGNullWindowID,
+        )
+        wins = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID) or []
+        for w in wins:
+            if w.get("kCGWindowOwnerName") == "Safari" and w.get("kCGWindowLayer", 0) == 0:
+                b = w.get("kCGWindowBounds", {})
+                if b.get("Height", 0) > 120:   # a real browser window, not a tiny element
+                    return True
+        return False
+    except Exception:
+        return True   # never block on an inspection error
+
+
+# --- Launch at login (via a LaunchAgent plist) ---------------------------------
+LAUNCH_AGENT = os.path.expanduser("~/Library/LaunchAgents/com.jacob.tidytab.plist")
+
+
+def _app_executable():
+    res = os.environ.get("RESOURCEPATH")
+    if res:  # …/TidyTab.app/Contents/Resources  →  …/TidyTab.app/Contents/MacOS/TidyTab
+        contents = os.path.dirname(res)
+        return os.path.join(contents, "MacOS", "TidyTab")
+    return None
+
+
+def login_item_enabled():
+    return os.path.exists(LAUNCH_AGENT)
+
+
+def set_login_item(enabled):
+    exe = _app_executable()
+    if enabled and exe:
+        os.makedirs(os.path.dirname(LAUNCH_AGENT), exist_ok=True)
+        plist = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+            '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+            '<plist version="1.0"><dict>'
+            '<key>Label</key><string>com.jacob.tidytab</string>'
+            f'<key>ProgramArguments</key><array><string>{exe}</string></array>'
+            '<key>RunAtLoad</key><true/></dict></plist>\n'
+        )
+        with open(LAUNCH_AGENT, "w") as f:
+            f.write(plist)
+    else:
+        try:
+            os.remove(LAUNCH_AGENT)
+        except OSError:
+            pass
 
 
 # ============================================================================ #
@@ -192,6 +254,9 @@ class TidyTabApp(rumps.App):
         self._idle_title = ""
         self._idle_template = True
 
+        self._login_item = rumps.MenuItem("Launch at login", callback=self._toggle_login)
+        self._login_item.state = login_item_enabled()
+
         # Two explicit actions (no hidden mode) — clear what each does.
         self.menu = [
             rumps.MenuItem("Unpin pinned tabs", callback=self._run_unpin),
@@ -199,12 +264,17 @@ class TidyTabApp(rumps.App):
             rumps.MenuItem("Stop", callback=self._stop),
             None,
             self._build_color_menu(),
+            self._login_item,
             rumps.MenuItem("Grant Accessibility…", callback=self._grant_accessibility),
             None,
             rumps.MenuItem("Quit", callback=self._quit),
         ]
 
         self._apply_idle()  # show the default white pin
+
+    def _toggle_login(self, sender):
+        sender.state = not sender.state
+        set_login_item(bool(sender.state))
 
         self._launch_check = rumps.Timer(self._launch_accessibility_check, 1.0)
         self._launch_check.start()
@@ -227,24 +297,22 @@ class TidyTabApp(rumps.App):
             self.icon = None
             self.title = self._idle_title
         else:                                 # tinted pin image (resized to ICON_DIM)
-            self.title = self._idle_title
             self.template = self._idle_template
             self.icon = self._idle_icon
-            self._resize_menubar_icon()
-
-    def _resize_menubar_icon(self):
-        # rumps' App.icon always renders the image at 20×20pt; shrink the NSImage to
-        # ICON_DIM and refresh the live status item so the menu-bar pin isn't oversized.
-        try:
-            img = self._icon_nsimage
-            if img is not None:
-                img.setSize_(ICON_DIM)
-                nsapp = getattr(self, "_nsapp", None)
-                item = getattr(nsapp, "nsstatusitem", None) if nsapp is not None else None
-                if item is not None:
+            self.title = ""
+            # Force the live status item to image-only. rumps' fallbackOnName() can
+            # leave the app name ("TidyTab") next to the pin when title+image are
+            # briefly both empty during a colour swap; setting the image + clearing
+            # the title LAST guarantees just the icon shows.
+            try:
+                img = self._icon_nsimage
+                item = getattr(getattr(self, "_nsapp", None), "nsstatusitem", None)
+                if img is not None and item is not None:
+                    img.setSize_(ICON_DIM)
                     item.setImage_(img)
-        except Exception:
-            pass
+                    item.setTitle_("")
+            except Exception:
+                pass
 
     def _set_icon(self, sender):
         for it in self._icon_items:
@@ -304,6 +372,20 @@ class TidyTabApp(rumps.App):
         activate_safari()
         time.sleep(0.7)
 
+        # If Safari is on a DIFFERENT Space and macOS didn't switch to it, its window
+        # isn't on-screen — refuse to click rather than click into whatever IS here.
+        if not safari_window_on_screen():
+            rumps.alert(
+                f"{APP_NAME}: Safari is on another Space",
+                "Safari's window is on a different desktop/Space and macOS didn't switch "
+                "to it, so TidyTab won't click. Switch to the Safari window yourself (or "
+                "turn on System Settings → Desktop & Dock → Mission Control → “When "
+                "switching to an application, switch to a Space with open windows for the "
+                "application”), then run TidyTab again. It acts on the FRONT Safari "
+                "window's pinned tabs.",
+            )
+            return
+
         op_label = "Close" if self._operation == "close" else "Unpin"
         try:
             centers = find_pinned_tab_centers()
@@ -322,7 +404,7 @@ class TidyTabApp(rumps.App):
         ok = rumps.alert(
             title=f"{op_label} {len(centers)} pinned tab(s)?",
             message=(f"TidyTab will {op_label.lower()} {len(centers)} pinned tab(s) in "
-                     "Safari.\n\nPress Space or move the mouse to a screen corner to "
+                     "Safari.\n\nPress Space or Esc, or move the mouse to a screen corner, to "
                      "stop mid-run."),
             ok=op_label, cancel="Cancel",
         )
@@ -345,7 +427,7 @@ class TidyTabApp(rumps.App):
 
     # ---- running-state UI -------------------------------------------------- #
     def _begin_running_ui(self):
-        self.title = "  Space to stop"
+        self.title = "  Space/Esc to stop"
         self._start_space_monitor()
         if self._watchdog is None:
             self._watchdog = rumps.Timer(self._check_done, 0.4)
@@ -368,7 +450,7 @@ class TidyTabApp(rumps.App):
 
         def handler(event):
             try:
-                if event.keyCode() == SPACE_KEYCODE:
+                if event.keyCode() in (SPACE_KEYCODE, ESC_KEYCODE):
                     self._stop_flag.set()
             except Exception:
                 pass
@@ -401,16 +483,30 @@ class TidyTabApp(rumps.App):
         _, centers = self._mode
         operation = self._operation
         try:
-            # The confirm dialog stole focus — bring Safari back before clicking so
-            # the synthesized clicks land on Safari's tabs, not on TidyTab/anything.
+            # The confirm dialog stole focus — bring Safari back before clicking.
             activate_safari()
             time.sleep(0.5)
             done = 0
-            for x, y in reversed(centers):  # rightmost-first keeps cached centres valid
-                if self._stop_flag.is_set():
+            expected = len(centers)
+            last_count = None
+            # Self-correcting: re-detect after every action, act on the rightmost
+            # remaining pinned tab, stop when none are left, and bail if the count
+            # ISN'T dropping — so a missed click can never become runaway clicking.
+            while not self._stop_flag.is_set():
+                current = find_pinned_tab_centers()
+                if not current:
+                    break                                   # all done
+                if last_count is not None and len(current) >= last_count:
+                    rumps.notification(APP_NAME, "Stopped",
+                                       "A pinned tab didn't change — stopping to be safe.")
                     break
+                last_count = len(current)
+                x, y = current[-1]                          # rightmost remaining pinned tab
                 self._tidy_one(x, y, operation)
                 done += 1
+                if done > expected + 3:                     # hard cap; never loop forever
+                    break
+                time.sleep(0.12)
             if not self._stop_flag.is_set():
                 rumps.notification(APP_NAME, "Done", f"Processed {done} pinned tab(s).")
         except pyautogui.FailSafeException:
