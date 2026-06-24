@@ -552,6 +552,7 @@ class TidyTabApp(rumps.App):
             done = 0
             expected = len(centers)
             last_count = None
+            row_y = None
             # Self-correcting: re-detect after every action, act on the rightmost
             # remaining pinned tab, stop when none are left, and bail if the count
             # ISN'T dropping — so a missed click can never become runaway clicking.
@@ -564,13 +565,16 @@ class TidyTabApp(rumps.App):
                                        "A pinned tab didn't change — stopping to be safe.")
                     break
                 last_count = len(current)
-                el, (x, y) = current[-1]                    # rightmost remaining pinned tab
+                el, (x, cy) = current[-1]                   # rightmost remaining pinned tab
+                if row_y is None:
+                    row_y = cy                              # lock the row's y → no vertical jitter
                 # Click-free close when the tab exposes a close button via the AX API;
-                # otherwise (and always for unpin) fall back to synthesized clicks.
+                # otherwise (and always for unpin) fall back to synthesized clicks on
+                # a single locked y, so the cursor sweeps cleanly left, not up-and-down.
                 if operation == "close" and close_tab_via_ax(el):
                     pass
                 else:
-                    self._tidy_one(x, y, operation)
+                    self._tidy_one(x, row_y, operation)
                 done += 1
                 if done > expected + 3:                     # hard cap; never loop forever
                     break
