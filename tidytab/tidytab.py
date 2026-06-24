@@ -17,6 +17,7 @@ in progress it shows "Space to stop" — Space (or a screen-corner slam) aborts.
 import os
 import time
 import threading
+import subprocess
 
 import rumps
 import pyautogui
@@ -88,9 +89,26 @@ def open_accessibility_settings():
 
 
 def activate_safari():
-    """Bring Safari to the front (even from another Space) so detection and any
-    synthesized clicks land on Safari — never on a random window/app."""
-    os.system("osascript -e 'tell application \"Safari\" to activate' >/dev/null 2>&1")
+    """Bring Safari to the front AND onto the current Space. Plain `activate` won't
+    switch Spaces — *simulating a Dock click* is the one path macOS lets carry you to
+    a window on another Space (same technique as Jacob's morning calendar popup)."""
+    script = (
+        'tell application "Safari"\n'
+        '  activate\n'
+        '  try\n'
+        '    set index of window 1 to 1\n'
+        '  end try\n'
+        'end tell\n'
+        'try\n'
+        '  tell application "System Events" to tell process "Dock" '
+        'to tell list 1 to click UI element "Safari"\n'
+        'end try\n'
+    )
+    try:
+        subprocess.run(["osascript", "-e", script], timeout=8,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 
 def safari_window_on_screen():
@@ -195,8 +213,9 @@ def _collect_radio_buttons(element, out, depth=0, max_depth=14):
         pass
 
 
-def find_pinned_tab_centers():
-    """Screen-coordinate centres of Safari's pinned tabs (left→right), or []."""
+def find_pinned_tabs():
+    """Return [(ax_element, (cx, cy)), ...] for Safari's pinned tabs, left→right; []
+    if none/unreadable. The element lets us try a click-free close via AXPress."""
     pid = _safari_pid()
     if not pid:
         return []
@@ -211,23 +230,44 @@ def find_pinned_tab_centers():
     radios = []
     _collect_radio_buttons(window, radios)
 
-    tabs = []
+    items = []
     for el in radios:
         pos = _ax_point(_ax_attr(el, "AXPosition"))
         sz = _ax_size(_ax_attr(el, "AXSize"))
         if pos and sz and sz[0] > 0:
-            tabs.append((pos[0], pos[1], sz[0], sz[1]))
-    if not tabs:
+            items.append((el, pos[0], pos[1], sz[0], sz[1]))
+    if not items:
         return []
 
-    tabs.sort(key=lambda t: t[0])
-    centers = []
-    for x, y, w, h in tabs:
+    items.sort(key=lambda t: t[1])  # by x
+    out = []
+    for el, x, y, w, h in items:
         if w <= PINNED_MAX_WIDTH:
-            centers.append((x + w / 2.0, y + h / 2.0))
+            out.append((el, (x + w / 2.0, y + h / 2.0)))
         else:
-            break
-    return centers
+            break  # first wide (titled) tab ends the pinned run
+    return out
+
+
+def find_pinned_tab_centers():
+    return [c for _, c in find_pinned_tabs()]
+
+
+def close_tab_via_ax(element):
+    """Try to close a tab click-free by AXPress-ing its close button. Returns True on
+    success, False if no close button was found (caller falls back to clicking)."""
+    try:
+        from ApplicationServices import AXUIElementPerformAction
+        for child in (_ax_attr(element, "AXChildren") or []):
+            if _ax_attr(child, "AXRole") != "AXButton":
+                continue
+            label = ((_ax_attr(child, "AXDescription") or "") + " " +
+                     (_ax_attr(child, "AXTitle") or "")).lower()
+            if "close" in label:
+                return AXUIElementPerformAction(child, "AXPress") == 0
+        return False
+    except Exception:
+        return False
 
 
 # ============================================================================ #
@@ -259,8 +299,8 @@ class TidyTabApp(rumps.App):
 
         # Two explicit actions (no hidden mode) — clear what each does.
         self.menu = [
-            rumps.MenuItem("Unpin pinned tabs", callback=self._run_unpin),
-            rumps.MenuItem("Close pinned tabs", callback=self._run_close),
+            rumps.MenuItem("Unpin pinned tabs  (⌘⌥U)", callback=self._run_unpin),
+            rumps.MenuItem("Close pinned tabs  (⌘⌥K)", callback=self._run_close),
             rumps.MenuItem("Stop", callback=self._stop),
             None,
             self._build_color_menu(),
@@ -272,12 +312,35 @@ class TidyTabApp(rumps.App):
 
         self._apply_idle()  # show the default white pin
 
+        self._launch_check = rumps.Timer(self._launch_accessibility_check, 1.0)
+        self._launch_check.start()
+        self._hotkey_monitor = None
+        self._start_hotkey_monitor()
+
     def _toggle_login(self, sender):
         sender.state = not sender.state
         set_login_item(bool(sender.state))
 
-        self._launch_check = rumps.Timer(self._launch_accessibility_check, 1.0)
-        self._launch_check.start()
+    def _start_hotkey_monitor(self):
+        # Always-on global hotkeys: ⌘⌥U = Unpin, ⌘⌥K = Close (no need to open the menu).
+        if self._hotkey_monitor is not None:
+            return
+
+        def handler(event):
+            try:
+                flags = event.modifierFlags()
+                if (flags & (1 << 20)) and (flags & (1 << 19)):   # ⌘ and ⌥
+                    ch = (event.charactersIgnoringModifiers() or "").lower()
+                    if ch == "u":
+                        self._run_unpin(None)
+                    elif ch == "k":
+                        self._run_close(None)
+            except Exception:
+                pass
+
+        self._hotkey_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+            NSEventMaskKeyDown, handler
+        )
 
     # ---- icon color submenu ----------------------------------------------- #
     def _build_color_menu(self):
@@ -493,7 +556,7 @@ class TidyTabApp(rumps.App):
             # remaining pinned tab, stop when none are left, and bail if the count
             # ISN'T dropping — so a missed click can never become runaway clicking.
             while not self._stop_flag.is_set():
-                current = find_pinned_tab_centers()
+                current = find_pinned_tabs()
                 if not current:
                     break                                   # all done
                 if last_count is not None and len(current) >= last_count:
@@ -501,8 +564,13 @@ class TidyTabApp(rumps.App):
                                        "A pinned tab didn't change — stopping to be safe.")
                     break
                 last_count = len(current)
-                x, y = current[-1]                          # rightmost remaining pinned tab
-                self._tidy_one(x, y, operation)
+                el, (x, y) = current[-1]                    # rightmost remaining pinned tab
+                # Click-free close when the tab exposes a close button via the AX API;
+                # otherwise (and always for unpin) fall back to synthesized clicks.
+                if operation == "close" and close_tab_via_ax(el):
+                    pass
+                else:
+                    self._tidy_one(x, y, operation)
                 done += 1
                 if done > expected + 3:                     # hard cap; never loop forever
                     break
