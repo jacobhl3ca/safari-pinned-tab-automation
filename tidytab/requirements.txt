@@ -1,0 +1,16 @@
+# TabTidy runtime + build dependencies.
+# Install into a venv:  pip install -r requirements.txt
+
+# Menu-bar app framework (also pulls in pyobjc-framework-Cocoa).
+rumps>=0.4.0
+
+# Synthesizes the mouse clicks / keystrokes that drive Safari.
+pyautogui>=0.9.54
+
+# PyObjC — needed by rumps for the Cocoa menu bar, and by py2app at build time.
+# (rumps already depends on pyobjc-framework-Cocoa; this pulls the full umbrella.)
+pyobjc>=9.0
+
+# Packages tabtidy.py into a double-clickable TabTidy.app.
+# Only needed when you build the .app (python setup.py py2app); not at runtime.
+py2app>=0.28
