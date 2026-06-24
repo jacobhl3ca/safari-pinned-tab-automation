@@ -49,7 +49,7 @@ TAB_DISTANCE = 36
 COUNTDOWN_SECONDS = 3
 SPACE_KEYCODE = 49
 PINNED_MAX_WIDTH = 72
-ICON_DIM = (16, 16)         # menu-bar icon point size (smaller than rumps' 20×20 default)
+ICON_DIM = (16, 18)         # menu-bar icon point size (a touch taller, a touch less wide)
 
 # Icon-color options: (label, silhouette file or None for the classic emoji, template?)
 ICON_OPTIONS = [
@@ -84,6 +84,12 @@ def open_accessibility_settings():
         "open 'x-apple.systempreferences:com.apple.preference.security"
         "?Privacy_Accessibility'"
     )
+
+
+def activate_safari():
+    """Bring Safari to the front (even from another Space) so detection and any
+    synthesized clicks land on Safari — never on a random window/app."""
+    os.system("osascript -e 'tell application \"Safari\" to activate' >/dev/null 2>&1")
 
 
 # ============================================================================ #
@@ -288,35 +294,41 @@ class TidyTabApp(rumps.App):
             )
             return
 
+        if _safari_pid() is None:
+            rumps.alert(APP_NAME,
+                        "Safari isn't running. Open Safari with some pinned tabs, then try again.")
+            return
+
+        # Bring Safari to the front first (handles it being on another Space) so we
+        # never click into the wrong app, then detect its pinned tabs.
+        activate_safari()
+        time.sleep(0.7)
+
         op_label = "Close" if self._operation == "close" else "Unpin"
         try:
             centers = find_pinned_tab_centers()
         except Exception:
             centers = []
 
-        if centers:
-            ok = rumps.alert(
-                title=f"{op_label} {len(centers)} pinned tab(s)?",
-                message=(f"TidyTab will {op_label.lower()} {len(centers)} pinned "
-                         "tab(s) in Safari.\n\nPress Space or move the mouse to a "
-                         "screen corner to stop mid-run."),
-                ok=op_label, cancel="Cancel",
+        if not centers:
+            rumps.alert(
+                f"{APP_NAME}: no pinned tabs found",
+                "Couldn't find pinned tabs in the front Safari window. Make sure Safari "
+                "is open with pinned tabs (and TidyTab has Accessibility permission), "
+                "then try again. (TidyTab won't click unless it has located the tabs.)",
             )
-            if ok != 1:
-                return
-            self._mode = ("auto", centers)
-        else:
-            ok = rumps.alert(
-                title="No pinned tabs detected",
-                message=("TidyTab couldn't read Safari's pinned tabs — make sure a "
-                         "Safari window is frontmost (and TidyTab has Accessibility "
-                         "permission).\n\nRun in manual mode instead? You'll hover the "
-                         "rightmost pinned tab and it sweeps left."),
-                ok="Manual run", cancel="Cancel",
-            )
-            if ok != 1:
-                return
-            self._mode = ("manual", [])
+            return
+
+        ok = rumps.alert(
+            title=f"{op_label} {len(centers)} pinned tab(s)?",
+            message=(f"TidyTab will {op_label.lower()} {len(centers)} pinned tab(s) in "
+                     "Safari.\n\nPress Space or move the mouse to a screen corner to "
+                     "stop mid-run."),
+            ok=op_label, cancel="Cancel",
+        )
+        if ok != 1:
+            return
+        self._mode = ("auto", centers)
 
         self._stop_flag.clear()
         self._begin_running_ui()
@@ -386,47 +398,26 @@ class TidyTabApp(rumps.App):
         time.sleep(0.15)
 
     def _automation_loop(self):
-        mode, centers = self._mode
+        _, centers = self._mode
         operation = self._operation
         try:
-            if mode == "auto":
-                time.sleep(0.4)
-                done = 0
-                for x, y in reversed(centers):  # rightmost-first keeps cached centres valid
-                    if self._stop_flag.is_set():
-                        break
-                    self._tidy_one(x, y, operation)
-                    done += 1
-                if not self._stop_flag.is_set():
-                    rumps.notification(APP_NAME, "Done",
-                                       f"Processed {done} pinned tab(s).")
-            else:
-                self._manual_fallback(operation)
+            # The confirm dialog stole focus — bring Safari back before clicking so
+            # the synthesized clicks land on Safari's tabs, not on TidyTab/anything.
+            activate_safari()
+            time.sleep(0.5)
+            done = 0
+            for x, y in reversed(centers):  # rightmost-first keeps cached centres valid
+                if self._stop_flag.is_set():
+                    break
+                self._tidy_one(x, y, operation)
+                done += 1
+            if not self._stop_flag.is_set():
+                rumps.notification(APP_NAME, "Done", f"Processed {done} pinned tab(s).")
         except pyautogui.FailSafeException:
             rumps.notification(APP_NAME, "Stopped",
                                "Fail-safe triggered (mouse moved to a corner).")
         except Exception as exc:
             rumps.notification(APP_NAME, "Error", str(exc))
-
-    def _manual_fallback(self, operation):
-        rumps.notification(
-            APP_NAME, "Manual mode",
-            "Hover the RIGHTMOST pinned tab — starting in "
-            f"{COUNTDOWN_SECONDS}s. Press Space or hit a corner to stop.",
-        )
-        time.sleep(COUNTDOWN_SECONDS)
-        cycle = 0
-        while not self._stop_flag.is_set():
-            cycle += 1
-            current_x, current_y = pyautogui.position()
-            self._tidy_one(current_x, current_y, operation)
-            new_x = current_x - TAB_DISTANCE
-            if new_x < 0:
-                rumps.notification(APP_NAME, "Done",
-                                   f"Reached the left edge after {cycle} cycle(s).")
-                break
-            pyautogui.moveTo(new_x, current_y, duration=0.1)
-            time.sleep(0.2)
 
 
 if __name__ == "__main__":
