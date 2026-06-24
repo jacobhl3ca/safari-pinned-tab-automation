@@ -14,9 +14,12 @@ Menu bar: a white pin by default (Icon color → classic 📌 / colors). While a
 in progress it shows "Space to stop" — Space (or a screen-corner slam) aborts.
 """
 
+from __future__ import annotations
+
 import os
 import time
 import threading
+from typing import Any, Optional
 
 import rumps
 import pyautogui
@@ -68,18 +71,18 @@ ICON_OPTIONS = [
 # ============================================================================ #
 # Accessibility helpers
 # ============================================================================ #
-def accessibility_trusted():
+def accessibility_trusted() -> bool:
     return bool(AXIsProcessTrusted())
 
 
-def prompt_accessibility():
+def prompt_accessibility() -> bool:
     try:
         return bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}))
     except Exception:
         return False
 
 
-def open_accessibility_settings():
+def open_accessibility_settings() -> None:
     os.system(
         "open 'x-apple.systempreferences:com.apple.preference.security"
         "?Privacy_Accessibility'"
@@ -89,33 +92,33 @@ def open_accessibility_settings():
 # ============================================================================ #
 # Accessibility-API tab finder (read-only)
 # ============================================================================ #
-def _ax_attr(element, name):
+def _ax_attr(element: Any, name: str) -> Any:
     err, value = AXUIElementCopyAttributeValue(element, name, None)
     return value if err == 0 else None
 
 
-def _ax_point(value):
+def _ax_point(value: Any) -> Optional[tuple[float, float]]:
     if value is None:
         return None
     ok, pt = AXValueGetValue(value, kAXValueCGPointType, None)
     return (pt.x, pt.y) if ok else None
 
 
-def _ax_size(value):
+def _ax_size(value: Any) -> Optional[tuple[float, float]]:
     if value is None:
         return None
     ok, sz = AXValueGetValue(value, kAXValueCGSizeType, None)
     return (sz.width, sz.height) if ok else None
 
 
-def _safari_pid():
+def _safari_pid() -> Optional[int]:
     for app in NSWorkspace.sharedWorkspace().runningApplications():
         if app.bundleIdentifier() == "com.apple.Safari":
             return app.processIdentifier()
     return None
 
 
-def _collect_radio_buttons(element, out, depth=0, max_depth=14):
+def _collect_radio_buttons(element: Any, out: list, depth: int = 0, max_depth: int = 14) -> None:
     if depth > max_depth:
         return
     try:
@@ -127,7 +130,7 @@ def _collect_radio_buttons(element, out, depth=0, max_depth=14):
         pass
 
 
-def find_pinned_tab_centers():
+def find_pinned_tab_centers() -> list[tuple[float, float]]:
     """Screen-coordinate centres of Safari's pinned tabs (left→right), or []."""
     pid = _safari_pid()
     if not pid:
@@ -165,7 +168,7 @@ def find_pinned_tab_centers():
 # ============================================================================ #
 # Menu-bar app
 # ============================================================================ #
-def _res(name):
+def _res(name: str) -> str:
     base = os.environ.get("RESOURCEPATH", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, name)
 
