@@ -15,16 +15,17 @@ pyautogui.PAUSE = 0.1  # Reduced pause for faster execution
 
 TAB_DISTANCE = 36  # pixels between adjacent Safari pinned tabs; adjust to match your display
 
-def get_user_options() -> tuple[str, str]:
-    """Prompt the user for operation type and direction, returning both as strings.
+def get_user_options() -> tuple[str, str, int | None]:
+    """Prompt the user for operation type, direction, and optional tab count.
 
     Returns:
-        A tuple of (operation_type, direction_type) where operation_type is
-        'unpin' or 'close', and direction_type is 'right_to_left' or 'left_to_right'.
+        A tuple of (operation_type, direction_type, max_tabs) where operation_type is
+        'unpin' or 'close', direction_type is 'right_to_left' or 'left_to_right', and
+        max_tabs is a positive int cap or None for unlimited (right_to_left only).
     """
     print("=== Safari Pinned Tab Options ===")
     print()
-    
+
     # Get operation type
     while True:
         operation = input("Choose operation: (1) Unpin tab (2) Close tab: ").strip()
@@ -32,7 +33,7 @@ def get_user_options() -> tuple[str, str]:
             operation_type = 'unpin' if operation == '1' else 'close'
             break
         print("Please enter 1 or 2")
-    
+
     # Get direction
     while True:
         direction = input("Choose direction: (1) <-- Right to left (Recommended) (2) --> Left to right: ").strip()
@@ -40,32 +41,52 @@ def get_user_options() -> tuple[str, str]:
             direction_type = 'right_to_left' if direction == '1' else 'left_to_right'
             break
         print("Please enter 1 or 2")
-    
+
+    # Get tab count — required for left_to_right (no geometric stop) to prevent runaway loop
+    if direction_type == 'left_to_right':
+        while True:
+            raw = input("How many pinned tabs to process? (enter a number): ").strip()
+            if raw.isdigit() and int(raw) > 0:
+                max_tabs = int(raw)
+                break
+            print("Please enter a positive number")
+    else:
+        while True:
+            raw = input("How many pinned tabs to process? (number, or ENTER for unlimited): ").strip()
+            if raw == "":
+                max_tabs = None
+                break
+            if raw.isdigit() and int(raw) > 0:
+                max_tabs = int(raw)
+                break
+            print("Please enter a positive number or press ENTER for unlimited")
+
     print()
     print(f"Operation: {operation_type.replace('_', ' ').title()}")
     print(f"Direction: {direction_type.replace('_', ' ').title()}")
+    print(f"Max tabs:  {max_tabs if max_tabs is not None else 'unlimited'}")
     print()
     print("Position your mouse where you want to start")
     print()
     print("To stop the automation at any time, press Ctrl+C in this terminal, or move your mouse to the top left of your screen")
     print()
-    
-    return operation_type, direction_type
+
+    return operation_type, direction_type, max_tabs
 
 def main() -> None:
     """Run the interactive automation loop for managing Safari pinned tabs.
 
     Collects user preferences, waits for confirmation, then repeatedly
-    right-clicks each pinned tab and selects unpin or close until the user
-    interrupts or the loop reaches the screen edge (right-to-left mode only).
+    right-clicks each pinned tab and selects unpin or close until max_tabs is
+    reached, the user interrupts, or the loop reaches the screen edge (right-to-left).
     """
     print()
     print("Starting FAST Safari Pinned Tabs Automation...")
     print()
-    
+
     try:
         # Get user options
-        operation_type, direction_type = get_user_options()
+        operation_type, direction_type, max_tabs = get_user_options()
 
         # Wait for user to be ready
         input("Press ENTER when you're ready to start (after positioning your mouse)...")
@@ -85,6 +106,9 @@ def main() -> None:
 
         while True:
             cycle += 1
+            if max_tabs is not None and cycle > max_tabs:
+                print(f"\n✅ Processed {max_tabs} tab(s) — stopping")
+                break
             print(f"\n--- Cycle {cycle} ---")
             
             # Get current position
