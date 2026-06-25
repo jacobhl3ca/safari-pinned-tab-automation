@@ -464,11 +464,12 @@ class TidyTabApp(rumps.App):
             )
             return
 
+        n = len(centers)
+        tabs_word = "tab" if n == 1 else "tabs"
         ok = rumps.alert(
-            title=f"{op_label} {len(centers)} pinned tab(s)?",
-            message=(f"TidyTab will {op_label.lower()} {len(centers)} pinned tab(s) in "
-                     "Safari.\n\nPress Space or Esc, or move the mouse to a screen corner, to "
-                     "stop mid-run."),
+            title=f"{op_label} {n} pinned {tabs_word}?",
+            message=(f"TidyTab will {op_label.lower()} {n} pinned {tabs_word} in "
+                     "Safari.\n\nPress Space or Esc to stop mid-run."),
             ok=op_label, cancel="Cancel",
         )
         if ok != 1:
@@ -580,7 +581,8 @@ class TidyTabApp(rumps.App):
                     break
                 time.sleep(0.12)
             if not self._stop_flag.is_set():
-                rumps.notification(APP_NAME, "Done", f"Processed {done} pinned tab(s).")
+                rumps.notification(APP_NAME, "Done",
+                                   f"Processed {done} pinned tab{'' if done == 1 else 's'}.")
         except pyautogui.FailSafeException:
             rumps.notification(APP_NAME, "Stopped",
                                "Fail-safe triggered (mouse moved to a corner).")
