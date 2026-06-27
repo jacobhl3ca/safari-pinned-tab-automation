@@ -44,7 +44,7 @@ from ApplicationServices import (
 
 # --- App identity (rename the app by changing this ONE constant) ---------------
 APP_NAME = "TidyTab"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 PREFS_PATH = os.path.expanduser("~/Library/Application Support/TidyTab/prefs.json")
 REPO = "jacobhl3ca/safari-pinned-tab-automation"
@@ -386,16 +386,19 @@ class TidyTabApp(rumps.App):
         else:
             self._idle_icon, self._idle_title, self._idle_template = _res(fname), "", template
 
-    def _check_updates(self, sender=None):
-        """Manual check: if a newer release exists, download + install + relaunch."""
-        def work():
-            latest = latest_release_version()
-            if latest and _ver_tuple(latest) > _ver_tuple(VERSION):
+    def _check_updates(self, _sender=None):
+        """Manual (menu) check — runs on the main thread so it shows a VISIBLE modal
+        result (rumps notifications were silently not displaying)."""
+        latest = latest_release_version()   # brief block; fine for a user-initiated click
+        if latest is None:
+            rumps.alert(APP_NAME, "Couldn't reach GitHub to check for updates. "
+                                  "Check your connection and try again.")
+        elif _ver_tuple(latest) > _ver_tuple(VERSION):
+            if rumps.alert(APP_NAME, f"Update available: v{latest}.\nDownload and install now?",
+                           ok="Update", cancel="Later") == 1:
                 self._do_self_update(latest)
-            elif sender is not None:
-                rumps.notification(APP_NAME, "Up to date",
-                                   f"You're on the latest (v{VERSION}).")
-        threading.Thread(target=work, daemon=True).start()
+        else:
+            rumps.alert(APP_NAME, f"You're on the latest version (v{VERSION}).")
 
     def _auto_update_on_launch(self):
         if not load_prefs().get("auto_update", True):
@@ -519,12 +522,32 @@ class TidyTabApp(rumps.App):
     # ---- launch / permission ---------------------------------------------- #
     def _launch_accessibility_check(self, timer):
         timer.stop()
-        if not accessibility_trusted():
+        if not load_prefs().get("onboarded"):
+            self._onboard()                 # first launch → friendly walkthrough
+        elif not accessibility_trusted():
             rumps.notification(
                 APP_NAME, "Accessibility permission needed",
                 "Enable TidyTab in Privacy & Security → Accessibility so it can "
                 "read and control Safari's tabs.",
             )
+
+    def _onboard(self):
+        prefs = load_prefs(); prefs["onboarded"] = True; save_prefs(prefs)
+        resp = rumps.alert(
+            title=f"Welcome to {APP_NAME} 📌",
+            message=(
+                "TidyTab clears your Safari pinned tabs in one sweep.\n\n"
+                "• Click the menu-bar pin → “Unpin pinned tabs” or “Close pinned tabs”\n"
+                "• Or use the hotkeys ⌘⌥U (unpin) / ⌘⌥K (close)\n"
+                "• It confirms the count first; press Space, Esc, or a screen corner to stop\n\n"
+                "One-time setup: TidyTab needs Accessibility permission to control Safari. "
+                "Click “Open Settings,” switch on TidyTab under Accessibility, and you're ready."
+            ),
+            ok="Open Settings", cancel="Later",
+        )
+        if resp == 1:
+            prompt_accessibility()
+            open_accessibility_settings()
 
     def _grant_accessibility(self, _sender):
         prompt_accessibility()
