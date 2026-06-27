@@ -6,6 +6,8 @@ This is a Python automation script for macOS that efficiently manages Safari pin
 Supports both unpinning and closing operations with bidirectional navigation.
 """
 
+from __future__ import annotations
+
 import time
 import pyautogui
 
