@@ -44,7 +44,7 @@ from ApplicationServices import (
 
 # --- App identity (rename the app by changing this ONE constant) ---------------
 APP_NAME = "TidyTab"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 
 PREFS_PATH = os.path.expanduser("~/Library/Application Support/TidyTab/prefs.json")
 REPO = "jacobhl3ca/safari-pinned-tab-automation"
@@ -60,12 +60,13 @@ COUNTDOWN_SECONDS = 3
 SPACE_KEYCODE = 49
 ESC_KEYCODE = 53
 PINNED_MAX_WIDTH = 72
-ICON_DIM = (16, 18)         # menu-bar icon point size (a touch taller, a touch less wide)
+ICON_DIM = (15, 17)         # menu-bar icon point size (centered pin, tighter footprint)
 
-# Icon-color options: (label, silhouette file or None for the classic emoji, template?)
+# Icon-color options: (label, silhouette file or None for the full-colour emoji, template?)
+# The flat colour tints come first; the realistic emoji pin sits at the bottom since
+# it isn't a colour like the others.
 ICON_OPTIONS = [
     ("White", "menubar_white.png", True),       # default; template adapts to the bar
-    ("Classic 📌", None, False),
     ("Red", "menubar_red.png", False),
     ("Orange", "menubar_orange.png", False),
     ("Yellow", "menubar_yellow.png", False),
@@ -73,6 +74,7 @@ ICON_OPTIONS = [
     ("Blue", "menubar_blue.png", False),
     ("Purple", "menubar_purple.png", False),
     ("Pink", "menubar_pink.png", False),
+    ("Real 📌", None, False),                    # the full-colour emoji pin (not a flat tint)
 ]
 
 
