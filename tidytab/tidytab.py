@@ -17,10 +17,13 @@ in progress it shows "Space to stop" — Space (or a screen-corner slam) aborts.
 from __future__ import annotations
 
 import os
+import re
+import json
 import time
 import threading
 import subprocess
 from typing import Any, Optional
+import urllib.request
 
 import rumps
 import pyautogui
@@ -44,6 +47,12 @@ from ApplicationServices import (
 
 # --- App identity (rename the app by changing this ONE constant) ---------------
 APP_NAME = "TidyTab"
+VERSION = "1.1.0"
+
+PREFS_PATH = os.path.expanduser("~/Library/Application Support/TidyTab/prefs.json")
+REPO = "jacobhl3ca/safari-pinned-tab-automation"
+RELEASES_API = f"https://api.github.com/repos/{REPO}/releases/latest"
+RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 
 # --- pyautogui safety ----------------------------------------------------------
 pyautogui.FAILSAFE = True
@@ -175,6 +184,38 @@ def set_login_item(enabled):
             pass
 
 
+# --- Preferences (persist the chosen menu-bar colour across launches) -----------
+def load_prefs():
+    try:
+        with open(PREFS_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_prefs(d):
+    try:
+        os.makedirs(os.path.dirname(PREFS_PATH), exist_ok=True)
+        with open(PREFS_PATH, "w") as f:
+            json.dump(d, f)
+    except Exception:
+        pass
+
+
+# --- Update check (compare bundled VERSION to the latest GitHub release tag) -----
+def _ver_tuple(s):
+    return tuple(int(x) for x in re.findall(r"\d+", s or "")[:3])
+
+
+def latest_release_version():
+    try:
+        req = urllib.request.Request(RELEASES_API, headers={"User-Agent": "TidyTab"})
+        data = json.load(urllib.request.urlopen(req, timeout=8))
+        return (data.get("tag_name") or "").lstrip("v")
+    except Exception:
+        return None
+
+
 # ============================================================================ #
 # Accessibility-API tab finder (read-only)
 # ============================================================================ #
@@ -299,6 +340,8 @@ class TidyTabApp(rumps.App):
 
         self._login_item = rumps.MenuItem("Launch at login", callback=self._toggle_login)
         self._login_item.state = login_item_enabled()
+        self._autoupdate_item = rumps.MenuItem("Auto-update on launch", callback=self._toggle_autoupdate)
+        self._autoupdate_item.state = load_prefs().get("auto_update", True)
 
         # Two explicit actions (no hidden mode) — clear what each does.
         self.menu = [
@@ -308,21 +351,105 @@ class TidyTabApp(rumps.App):
             None,
             self._build_color_menu(),
             self._login_item,
+            self._autoupdate_item,
             rumps.MenuItem("Grant Accessibility…", callback=self._grant_accessibility),
             None,
+            rumps.MenuItem(f"Check for Updates…  (v{VERSION})", callback=self._check_updates),
             rumps.MenuItem("Quit", callback=self._quit),
         ]
 
-        self._apply_idle()  # show the default white pin
+        self._load_saved_color()   # restore the menu-bar colour chosen last time
+        self._apply_idle()
 
         self._launch_check = rumps.Timer(self._launch_accessibility_check, 1.0)
         self._launch_check.start()
         self._hotkey_monitor = None
         self._start_hotkey_monitor()
+        self._auto_update_on_launch()  # self-update on launch if a newer release exists
+        self._update_timer = rumps.Timer(lambda _t: self._auto_update_on_launch(), 14400)
+        self._update_timer.start()     # …and re-check every ~4h for long-running sessions
 
     def _toggle_login(self, sender):
         sender.state = not sender.state
         set_login_item(bool(sender.state))
+
+    def _toggle_autoupdate(self, sender):
+        sender.state = not sender.state
+        prefs = load_prefs(); prefs["auto_update"] = bool(sender.state); save_prefs(prefs)
+
+    def _load_saved_color(self):
+        saved = load_prefs().get("color")
+        if not saved or saved not in self._icon_map:
+            return
+        for it in self._icon_items:
+            it.state = (it.title == saved)
+        fname, template = self._icon_map[saved]
+        if fname is None:
+            self._idle_icon, self._idle_title, self._idle_template = None, "📌", False
+        else:
+            self._idle_icon, self._idle_title, self._idle_template = _res(fname), "", template
+
+    def _check_updates(self, sender=None):
+        """Manual check: if a newer release exists, download + install + relaunch."""
+        def work():
+            latest = latest_release_version()
+            if latest and _ver_tuple(latest) > _ver_tuple(VERSION):
+                self._do_self_update(latest)
+            elif sender is not None:
+                rumps.notification(APP_NAME, "Up to date",
+                                   f"You're on the latest (v{VERSION}).")
+        threading.Thread(target=work, daemon=True).start()
+
+    def _auto_update_on_launch(self):
+        if not load_prefs().get("auto_update", True):
+            return
+
+        def work():
+            latest = latest_release_version()
+            if not (latest and _ver_tuple(latest) > _ver_tuple(VERSION)):
+                return
+            if load_prefs().get("update_attempted") == latest:   # tried + still behind → don't loop
+                rumps.notification(APP_NAME, f"Update v{latest} available",
+                                   "Auto-update didn't apply — use “Check for Updates…”.")
+                return
+            self._do_self_update(latest)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _do_self_update(self, latest):
+        """Download the latest notarized dmg, verify its signature, swap it into
+        /Applications, and relaunch. Guarded against update loops + bad downloads."""
+        try:
+            import shutil
+            rumps.notification(APP_NAME, f"Updating to v{latest}…",
+                               "Downloading — TidyTab will relaunch.")
+            prefs = load_prefs(); prefs["update_attempted"] = latest; save_prefs(prefs)
+            dmg = "/tmp/TidyTab_update.dmg"
+            urllib.request.urlretrieve(
+                f"https://github.com/{REPO}/releases/latest/download/TidyTab.dmg", dmg)
+            mnt = "/tmp/tidytab_update_mnt"
+            subprocess.run(["hdiutil", "detach", mnt],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # clear any stale mount
+            subprocess.run(["hdiutil", "attach", dmg, "-nobrowse", "-mountpoint", mnt],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            src = os.path.join(mnt, "TidyTab.app")
+            ok = os.path.exists(src) and subprocess.run(
+                ["codesign", "--verify", "--quiet", src]).returncode == 0
+            if ok:
+                staging = "/Applications/.TidyTab.new"
+                shutil.rmtree(staging, ignore_errors=True)
+                shutil.copytree(src, staging)
+                shutil.rmtree("/Applications/TidyTab.app", ignore_errors=True)
+                os.rename(staging, "/Applications/TidyTab.app")
+            subprocess.run(["hdiutil", "detach", mnt],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if ok:
+                subprocess.Popen(["open", "/Applications/TidyTab.app"])
+                rumps.quit_application()
+            else:
+                rumps.notification(APP_NAME, "Update skipped",
+                                   "The downloaded update failed verification — try again later.")
+        except Exception as exc:
+            rumps.notification(APP_NAME, "Update failed", str(exc))
 
     def _start_hotkey_monitor(self):
         # Always-on global hotkeys: ⌘⌥U = Unpin, ⌘⌥K = Close (no need to open the menu).
@@ -388,6 +515,7 @@ class TidyTabApp(rumps.App):
             self._idle_icon, self._idle_title, self._idle_template = None, "📌", False
         else:
             self._idle_icon, self._idle_title, self._idle_template = _res(fname), "", template
+        save_prefs({"color": sender.title})   # persist across launches
         if not (self._worker and self._worker.is_alive()):
             self._apply_idle()
 
@@ -467,11 +595,12 @@ class TidyTabApp(rumps.App):
             )
             return
 
+        n = len(centers)
+        tabs_word = "tab" if n == 1 else "tabs"
         ok = rumps.alert(
-            title=f"{op_label} {len(centers)} pinned tab(s)?",
-            message=(f"TidyTab will {op_label.lower()} {len(centers)} pinned tab(s) in "
-                     "Safari.\n\nPress Space or Esc, or move the mouse to a screen corner, to "
-                     "stop mid-run."),
+            title=f"{op_label} {n} pinned {tabs_word}?",
+            message=(f"TidyTab will {op_label.lower()} {n} pinned {tabs_word} in "
+                     "Safari.\n\nPress Space or Esc to stop mid-run."),
             ok=op_label, cancel="Cancel",
         )
         if ok != 1:
@@ -583,7 +712,8 @@ class TidyTabApp(rumps.App):
                     break
                 time.sleep(0.12)
             if not self._stop_flag.is_set():
-                rumps.notification(APP_NAME, "Done", f"Processed {done} pinned tab(s).")
+                rumps.notification(APP_NAME, "Done",
+                                   f"Processed {done} pinned tab{'' if done == 1 else 's'}.")
         except pyautogui.FailSafeException:
             rumps.notification(APP_NAME, "Stopped",
                                "Fail-safe triggered (mouse moved to a corner).")
