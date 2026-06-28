@@ -44,7 +44,7 @@ from ApplicationServices import (
 
 # --- App identity (rename the app by changing this ONE constant) ---------------
 APP_NAME = "TidyTab"
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 
 PREFS_PATH = os.path.expanduser("~/Library/Application Support/TidyTab/prefs.json")
 REPO = "jacobhl3ca/safari-pinned-tab-automation"
@@ -60,7 +60,11 @@ COUNTDOWN_SECONDS = 3
 SPACE_KEYCODE = 49
 ESC_KEYCODE = 53
 PINNED_MAX_WIDTH = 72
-ICON_DIM = (13, 13)         # menu-bar icon point size (square pin; smaller than the 22pt bar so the pin's ink height matches neighbor SF-Symbol glyphs instead of overshooting top & bottom)
+ICON_DIM = (20, 20)         # menu-bar icon FOOTPRINT in points = rumps' own default (NSStatusItem fits a
+                            # template image to the ~22pt bar regardless). The visible pin SIZE is controlled
+                            # by transparent padding baked into the menubar_*.png art (~70% ink, ~30% margin),
+                            # so the pin's ink lands ~14pt — flush with neighbor SF-Symbol glyphs. Keeping this
+                            # at rumps' default 20pt means the colour-swap repaint path can't shrink the icon.
 
 # Icon-color options: (label, silhouette file or None for the full-colour emoji, template?)
 # The flat colour tints come first; the realistic emoji pin sits at the bottom since
