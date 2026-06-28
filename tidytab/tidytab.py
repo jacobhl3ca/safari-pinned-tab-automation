@@ -520,7 +520,7 @@ class TidyTabApp(rumps.App):
             self._idle_icon, self._idle_title, self._idle_template = None, "📌", False
         else:
             self._idle_icon, self._idle_title, self._idle_template = _res(fname), "", template
-        save_prefs({"color": sender.title})   # persist across launches
+        prefs = load_prefs(); prefs["color"] = sender.title; save_prefs(prefs)
         if not (self._worker and self._worker.is_alive()):
             self._apply_idle()
 
