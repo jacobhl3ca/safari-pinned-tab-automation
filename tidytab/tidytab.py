@@ -106,7 +106,7 @@ def open_accessibility_settings() -> None:
     )
 
 
-def activate_safari():
+def activate_safari() -> None:
     """Bring Safari to the front AND onto the current Space. Plain `activate` won't
     switch Spaces — *simulating a Dock click* is the one path macOS lets carry you to
     a window on another Space (same technique as Jacob's morning calendar popup)."""
@@ -129,7 +129,7 @@ def activate_safari():
         pass
 
 
-def safari_window_on_screen():
+def safari_window_on_screen() -> bool:
     """True iff Safari has a real window on the CURRENT Space (on-screen).
 
     If Safari is on another Desktop/Space, `activate` may not switch to it (depends
@@ -156,7 +156,7 @@ def safari_window_on_screen():
 LAUNCH_AGENT = os.path.expanduser("~/Library/LaunchAgents/com.jacob.tidytab.plist")
 
 
-def _app_executable():
+def _app_executable() -> Optional[str]:
     res = os.environ.get("RESOURCEPATH")
     if res:  # …/TidyTab.app/Contents/Resources  →  …/TidyTab.app/Contents/MacOS/TidyTab
         contents = os.path.dirname(res)
@@ -164,11 +164,11 @@ def _app_executable():
     return None
 
 
-def login_item_enabled():
+def login_item_enabled() -> bool:
     return os.path.exists(LAUNCH_AGENT)
 
 
-def set_login_item(enabled):
+def set_login_item(enabled: bool) -> None:
     exe = _app_executable()
     if enabled and exe:
         os.makedirs(os.path.dirname(LAUNCH_AGENT), exist_ok=True)
@@ -191,7 +191,7 @@ def set_login_item(enabled):
 
 
 # --- Preferences (persist the chosen menu-bar colour across launches) -----------
-def load_prefs():
+def load_prefs() -> dict[str, Any]:
     try:
         with open(PREFS_PATH) as f:
             return json.load(f)
@@ -199,7 +199,7 @@ def load_prefs():
         return {}
 
 
-def save_prefs(d):
+def save_prefs(d: dict[str, Any]) -> None:
     try:
         os.makedirs(os.path.dirname(PREFS_PATH), exist_ok=True)
         with open(PREFS_PATH, "w") as f:
@@ -209,11 +209,11 @@ def save_prefs(d):
 
 
 # --- Update check (compare bundled VERSION to the latest GitHub release tag) -----
-def _ver_tuple(s):
+def _ver_tuple(s: Optional[str]) -> tuple[int, ...]:
     return tuple(int(x) for x in re.findall(r"\d+", s or "")[:3])
 
 
-def latest_release_version():
+def latest_release_version() -> Optional[str]:
     try:
         req = urllib.request.Request(RELEASES_API, headers={"User-Agent": "TidyTab"})
         data = json.load(urllib.request.urlopen(req, timeout=8))
@@ -299,11 +299,11 @@ def find_pinned_tabs() -> list[tuple[Any, tuple[float, float]]]:
     return out
 
 
-def find_pinned_tab_centers():
+def find_pinned_tab_centers() -> list[tuple[float, float]]:
     return [c for _, c in find_pinned_tabs()]
 
 
-def close_tab_via_ax(element):
+def close_tab_via_ax(element: Any) -> bool:
     """Try to close a tab click-free by AXPress-ing its close button. Returns True on
     success, False if no close button was found (caller falls back to clicking)."""
     try:
