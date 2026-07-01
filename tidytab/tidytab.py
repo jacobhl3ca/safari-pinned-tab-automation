@@ -100,9 +100,9 @@ def prompt_accessibility() -> bool:
 
 
 def open_accessibility_settings() -> None:
-    os.system(
-        "open 'x-apple.systempreferences:com.apple.preference.security"
-        "?Privacy_Accessibility'"
+    subprocess.run(
+        ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
 
 
