@@ -329,7 +329,7 @@ def _res(name: str) -> str:
 
 
 class TidyTabApp(rumps.App):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(APP_NAME, quit_button=None)
 
         self._mode = ("auto", [])
@@ -375,15 +375,15 @@ class TidyTabApp(rumps.App):
         self._update_timer = rumps.Timer(lambda _t: self._auto_update_on_launch(), 14400)
         self._update_timer.start()     # …and re-check every ~4h for long-running sessions
 
-    def _toggle_login(self, sender):
+    def _toggle_login(self, sender: Any) -> None:
         sender.state = not sender.state
         set_login_item(bool(sender.state))
 
-    def _toggle_autoupdate(self, sender):
+    def _toggle_autoupdate(self, sender: Any) -> None:
         sender.state = not sender.state
         prefs = load_prefs(); prefs["auto_update"] = bool(sender.state); save_prefs(prefs)
 
-    def _load_saved_color(self):
+    def _load_saved_color(self) -> None:
         saved = load_prefs().get("color")
         if not saved or saved not in self._icon_map:
             return
@@ -395,7 +395,7 @@ class TidyTabApp(rumps.App):
         else:
             self._idle_icon, self._idle_title, self._idle_template = _res(fname), "", template
 
-    def _check_updates(self, _sender=None):
+    def _check_updates(self, _sender: Any = None) -> None:
         """Manual (menu) check — runs on the main thread so it shows a VISIBLE modal
         result (rumps notifications were silently not displaying)."""
         latest = latest_release_version()   # brief block; fine for a user-initiated click
@@ -409,7 +409,7 @@ class TidyTabApp(rumps.App):
         else:
             rumps.alert(APP_NAME, f"You're on the latest version (v{VERSION}).")
 
-    def _auto_update_on_launch(self):
+    def _auto_update_on_launch(self) -> None:
         if not load_prefs().get("auto_update", True):
             return
 
@@ -424,7 +424,7 @@ class TidyTabApp(rumps.App):
             self._do_self_update(latest)
         threading.Thread(target=work, daemon=True).start()
 
-    def _do_self_update(self, latest):
+    def _do_self_update(self, latest: str) -> None:
         """Download the latest notarized dmg, verify its signature, swap it into
         /Applications, and relaunch. Guarded against update loops + bad downloads."""
         try:
@@ -460,7 +460,7 @@ class TidyTabApp(rumps.App):
         except Exception as exc:
             rumps.notification(APP_NAME, "Update failed", str(exc))
 
-    def _start_hotkey_monitor(self):
+    def _start_hotkey_monitor(self) -> None:
         # Always-on global hotkeys: ⌘⌥U = Unpin, ⌘⌥K = Close (no need to open the menu).
         if self._hotkey_monitor is not None:
             return
@@ -482,7 +482,7 @@ class TidyTabApp(rumps.App):
         )
 
     # ---- icon color submenu ----------------------------------------------- #
-    def _build_color_menu(self):
+    def _build_color_menu(self) -> rumps.MenuItem:
         color_menu = rumps.MenuItem("Icon color")
         self._icon_items = []
         self._icon_map = {}
@@ -494,7 +494,7 @@ class TidyTabApp(rumps.App):
         self._icon_items[0].state = True  # White (default)
         return color_menu
 
-    def _apply_idle(self):
+    def _apply_idle(self) -> None:
         if self._idle_icon is None:           # classic 📌 emoji
             self.icon = None
             self.title = self._idle_title
@@ -516,7 +516,7 @@ class TidyTabApp(rumps.App):
             except Exception:
                 pass
 
-    def _set_icon(self, sender):
+    def _set_icon(self, sender: Any) -> None:
         for it in self._icon_items:
             it.state = (it is sender)
         fname, template = self._icon_map[sender.title]
@@ -529,7 +529,7 @@ class TidyTabApp(rumps.App):
             self._apply_idle()
 
     # ---- launch / permission ---------------------------------------------- #
-    def _launch_accessibility_check(self, timer):
+    def _launch_accessibility_check(self, timer: Any) -> None:
         timer.stop()
         if not load_prefs().get("onboarded"):
             self._onboard()                 # first launch → friendly walkthrough
@@ -540,7 +540,7 @@ class TidyTabApp(rumps.App):
                 "read and control Safari's tabs.",
             )
 
-    def _onboard(self):
+    def _onboard(self) -> None:
         prefs = load_prefs(); prefs["onboarded"] = True; save_prefs(prefs)
         resp = rumps.alert(
             title=f"Welcome to {APP_NAME} 📌",
@@ -558,20 +558,20 @@ class TidyTabApp(rumps.App):
             prompt_accessibility()
             open_accessibility_settings()
 
-    def _grant_accessibility(self, _sender):
+    def _grant_accessibility(self, _sender: Any) -> None:
         prompt_accessibility()
         open_accessibility_settings()
 
     # ---- run / stop -------------------------------------------------------- #
-    def _run_unpin(self, _sender):
+    def _run_unpin(self, _sender: Any) -> None:
         self._operation = "unpin"
         self._start()
 
-    def _run_close(self, _sender):
+    def _run_close(self, _sender: Any) -> None:
         self._operation = "close"
         self._start()
 
-    def _start(self):
+    def _start(self) -> None:
         if self._worker and self._worker.is_alive():
             rumps.notification(APP_NAME, "Already running",
                                "Press Space to stop the current run.")
@@ -641,34 +641,34 @@ class TidyTabApp(rumps.App):
         self._worker = threading.Thread(target=self._automation_loop, daemon=True)
         self._worker.start()
 
-    def _stop(self, _sender):
+    def _stop(self, _sender: Any) -> None:
         self._stop_flag.set()
 
-    def _quit(self, _sender):
+    def _quit(self, _sender: Any) -> None:
         self._stop_flag.set()
         self._stop_space_monitor()
         rumps.quit_application()
 
     # ---- running-state UI -------------------------------------------------- #
-    def _begin_running_ui(self):
+    def _begin_running_ui(self) -> None:
         self.title = "  Space/Esc to stop"
         self._start_space_monitor()
         if self._watchdog is None:
             self._watchdog = rumps.Timer(self._check_done, 0.4)
             self._watchdog.start()
 
-    def _end_running_ui(self):
+    def _end_running_ui(self) -> None:
         self._apply_idle()
         self._stop_space_monitor()
         if self._watchdog is not None:
             self._watchdog.stop()
             self._watchdog = None
 
-    def _check_done(self, _timer):
+    def _check_done(self, _timer: Any) -> None:
         if self._worker is None or not self._worker.is_alive():
             self._end_running_ui()
 
-    def _start_space_monitor(self):
+    def _start_space_monitor(self) -> None:
         if self._space_monitor is not None:
             return
 
@@ -683,13 +683,13 @@ class TidyTabApp(rumps.App):
             NSEventMaskKeyDown, handler
         )
 
-    def _stop_space_monitor(self):
+    def _stop_space_monitor(self) -> None:
         if self._space_monitor is not None:
             NSEvent.removeMonitor_(self._space_monitor)
             self._space_monitor = None
 
     # ---- the work ---------------------------------------------------------- #
-    def _tidy_one(self, x, y, operation):
+    def _tidy_one(self, x: float, y: float, operation: str) -> None:
         pyautogui.moveTo(x, y, duration=0.08)
         pyautogui.click()
         time.sleep(0.1)
@@ -703,7 +703,7 @@ class TidyTabApp(rumps.App):
         pyautogui.press("enter")
         time.sleep(0.15)
 
-    def _automation_loop(self):
+    def _automation_loop(self) -> None:
         _, centers = self._mode
         operation = self._operation
         try:
