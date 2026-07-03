@@ -405,7 +405,7 @@ class TidyTabApp(rumps.App):
         elif _ver_tuple(latest) > _ver_tuple(VERSION):
             if rumps.alert(APP_NAME, f"Update available: v{latest}.\nDownload and install now?",
                            ok="Update", cancel="Later") == 1:
-                self._do_self_update(latest)
+                threading.Thread(target=self._do_self_update, args=(latest,), daemon=True).start()
         else:
             rumps.alert(APP_NAME, f"You're on the latest version (v{VERSION}).")
 
