@@ -20,6 +20,7 @@ import os
 import re
 import json
 import time
+import shutil
 import threading
 import subprocess
 from typing import Any, Optional
@@ -428,7 +429,6 @@ class TidyTabApp(rumps.App):
         """Download the latest notarized dmg, verify its signature, swap it into
         /Applications, and relaunch. Guarded against update loops + bad downloads."""
         try:
-            import shutil
             rumps.notification(APP_NAME, f"Updating to v{latest}…",
                                "Downloading — TidyTab will relaunch.")
             prefs = load_prefs(); prefs["update_attempted"] = latest; save_prefs(prefs)
@@ -451,6 +451,10 @@ class TidyTabApp(rumps.App):
                 os.rename(staging, "/Applications/TidyTab.app")
             subprocess.run(["hdiutil", "detach", mnt],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                os.unlink(dmg)
+            except OSError:
+                pass
             if ok:
                 subprocess.Popen(["open", "/Applications/TidyTab.app"])
                 rumps.quit_application()
