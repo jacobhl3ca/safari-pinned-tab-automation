@@ -443,14 +443,16 @@ class TidyTabApp(rumps.App):
             src = os.path.join(mnt, "TidyTab.app")
             ok = os.path.exists(src) and subprocess.run(
                 ["codesign", "--verify", "--quiet", src]).returncode == 0
-            if ok:
-                staging = "/Applications/.TidyTab.new"
-                shutil.rmtree(staging, ignore_errors=True)
-                shutil.copytree(src, staging)
-                shutil.rmtree("/Applications/TidyTab.app", ignore_errors=True)
-                os.rename(staging, "/Applications/TidyTab.app")
-            subprocess.run(["hdiutil", "detach", mnt],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                if ok:
+                    staging = "/Applications/.TidyTab.new"
+                    shutil.rmtree(staging, ignore_errors=True)
+                    shutil.copytree(src, staging)
+                    shutil.rmtree("/Applications/TidyTab.app", ignore_errors=True)
+                    os.rename(staging, "/Applications/TidyTab.app")
+            finally:
+                subprocess.run(["hdiutil", "detach", mnt],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
                 os.unlink(dmg)
             except OSError:
