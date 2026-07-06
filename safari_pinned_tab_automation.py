@@ -8,8 +8,17 @@ Supports both unpinning and closing operations with bidirectional navigation.
 
 from __future__ import annotations
 
+import sys
 import time
-import pyautogui
+
+try:
+    import pyautogui
+except ImportError:
+    sys.exit(
+        "Error: pyautogui is not installed.\n"
+        "Run:  pip install -r requirements.txt\n"
+        "  or: pip install pyautogui"
+    )
 
 # Safety settings
 pyautogui.FAILSAFE = True
