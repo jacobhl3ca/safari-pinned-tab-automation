@@ -3,10 +3,8 @@
 A tiny **macOS menu-bar app** that tidies up your **Safari pinned tabs** —
 unpinning or closing a whole row of them with one click, no terminal needed.
 
-It's a GUI wrapper around an interactive CLI automation script. Under the hood it
-synthesizes the exact same mouse-click / keystroke cycle as the original script
-(`safari_pinned_tab_automation.py`), but driven from a menu-bar dropdown instead
-of question-and-answer prompts.
+It auto-locates pinned tabs via the macOS Accessibility API, confirms the count,
+then acts on each one. No need to position the mouse or pick a direction.
 
 > The app name is set by a single constant — `APP_NAME = "TidyTab"` at the top of
 > `tidytab.py` (and mirrored in `setup.py`). Change it there to rename everything.
@@ -15,31 +13,26 @@ of question-and-answer prompts.
 
 ## What it does
 
-Pick your options from the menu bar, then hit **Run**:
+Click the 📌 pin in your menu bar and choose an action:
 
-- **Operation** — *Unpin tabs* (default) or *Close tabs*
-- **Direction** — *Right → Left (recommended)* (default) or *Left → Right*
-- **Run (3s countdown)** — shows a notification telling you to put the mouse over
-  the **rightmost** pinned Safari tab, waits 3 seconds, then runs the loop.
-- **Stop** — breaks the loop at the next cycle.
-- **Quit**
+- **Unpin pinned tabs  (⌘⌥U)** — removes the pin from every pinned tab
+- **Close pinned tabs  (⌘⌥K)** — closes every pinned tab entirely
+- **Stop** — aborts a run in progress (or press **Space** / **Esc**)
 
-Each cycle does: left-click the tab → right-click for the context menu →
-press **Down** (1× to reach *Unpin*, 3× to reach *Close*) → press **Enter**.
-For *Right → Left* it then steps the mouse 36px left each cycle until it runs off
-the left edge and stops. For *Left → Right* it stays put, because removing a tab
-shifts the rest left automatically.
+TidyTab shows a confirmation ("Unpin 5 pinned tabs?") before acting. On OK it
+auto-detects the rightmost pinned tab, acts on it, re-detects, and repeats until
+none remain. It stops automatically if a tab doesn't change (safety guard) or if
+you abort.
 
-**Fail-safe:** slam the mouse into any screen corner to abort instantly
-(pyautogui's `FAILSAFE`). Errors surface as a notification — the menu bar never
-crashes.
+**Fail-safe:** press **Space** or **Esc**, or slam the mouse into any screen
+corner, to abort instantly.
 
 ---
 
 ## Set up a virtual environment & install deps
 
 ```bash
-cd /Users/jacob/CascadeProjects/tabtidy
+cd /path/to/safari-pinned-tab-automation/tidytab
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -56,7 +49,7 @@ source .venv/bin/activate
 python tidytab.py
 ```
 
-A 📌 appears in the menu bar. Use the menus, then **Run**.
+A 📌 appears in the menu bar. Choose **Unpin pinned tabs** or **Close pinned tabs**.
 
 > In dev mode, the **terminal/Python** running the script is what needs
 > Accessibility permission (see below). When you build the `.app`, the app
@@ -82,9 +75,10 @@ app (no Dock icon, thanks to `LSUIElement: True` in the plist). Drag it to
 
 ## ⚠️ One-time macOS permission (required — read this!)
 
-TidyTab works by **synthesizing mouse clicks and keystrokes**. macOS **silently
-drops** synthesized input from apps that haven't been granted **Accessibility**
-permission — the app will appear to "do nothing" if you skip this step.
+TidyTab works by **reading the Accessibility API** to find tabs and
+**synthesizing mouse clicks and keystrokes** to act on them. macOS **silently
+drops** synthesized input and blocks API reads from apps that haven't been
+granted **Accessibility** permission.
 
 1. Open **System Settings → Privacy & Security → Accessibility**.
 2. Click **+** and add the app that's doing the synthesizing:
@@ -102,9 +96,7 @@ You may also see an **Automation** prompt the first time it controls Safari
 ## Caveats
 
 - **Accessibility permission is mandatory** — without it, clicks/keys are dropped
-  and nothing happens (see above).
+  and tab detection fails (see above).
 - This automation **drives the real mouse and keyboard**. Don't touch the machine
-  while it runs; keep a screen corner handy as the abort fail-safe.
-- The 36px tab spacing assumes default Safari pinned-tab sizing; if your tabs
-  look denser/wider, adjust `TAB_DISTANCE` in `tidytab.py`.
+  while it runs; keep a screen corner or the Space key handy as abort fail-safes.
 - `py2app` may need to be `pip install`-ed into your venv before building.
