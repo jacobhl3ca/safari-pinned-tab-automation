@@ -433,8 +433,12 @@ class TidyTabApp(rumps.App):
                                "Downloading — TidyTab will relaunch.")
             prefs = load_prefs(); prefs["update_attempted"] = latest; save_prefs(prefs)
             dmg = "/tmp/TidyTab_update.dmg"
-            urllib.request.urlretrieve(
-                f"https://github.com/{REPO}/releases/latest/download/TidyTab.dmg", dmg)
+            req = urllib.request.Request(
+                f"https://github.com/{REPO}/releases/latest/download/TidyTab.dmg",
+                headers={"User-Agent": "TidyTab"},
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp, open(dmg, "wb") as fh:
+                shutil.copyfileobj(resp, fh)
             mnt = "/tmp/tidytab_update_mnt"
             subprocess.run(["hdiutil", "detach", mnt],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # clear any stale mount
