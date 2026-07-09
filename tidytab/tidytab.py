@@ -457,10 +457,10 @@ class TidyTabApp(rumps.App):
             finally:
                 subprocess.run(["hdiutil", "detach", mnt],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            try:
-                os.unlink(dmg)
-            except OSError:
-                pass
+                try:
+                    os.unlink(dmg)
+                except OSError:
+                    pass
             if ok:
                 subprocess.Popen(["open", "/Applications/TidyTab.app"])
                 rumps.quit_application()
