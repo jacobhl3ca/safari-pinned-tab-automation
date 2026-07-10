@@ -40,6 +40,7 @@ from ApplicationServices import (
     AXIsProcessTrustedWithOptions,
     AXUIElementCreateApplication,
     AXUIElementCopyAttributeValue,
+    AXUIElementPerformAction,
     AXValueGetValue,
     kAXValueCGPointType,
     kAXValueCGSizeType,
@@ -308,7 +309,6 @@ def close_tab_via_ax(element: Any) -> bool:
     """Try to close a tab click-free by AXPress-ing its close button. Returns True on
     success, False if no close button was found (caller falls back to clicking)."""
     try:
-        from ApplicationServices import AXUIElementPerformAction
         for child in (_ax_attr(element, "AXChildren") or []):
             if _ax_attr(child, "AXRole") != "AXButton":
                 continue
