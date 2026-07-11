@@ -6,17 +6,37 @@ This is a Python automation script for macOS that efficiently manages Safari pin
 Supports both unpinning and closing operations with bidirectional navigation.
 """
 
+from __future__ import annotations
+
+import sys
 import time
-import pyautogui
+
+try:
+    import pyautogui
+except ImportError:
+    sys.exit(
+        "Error: pyautogui is not installed.\n"
+        "Run:  pip install -r requirements.txt\n"
+        "  or: pip install pyautogui"
+    )
 
 # Safety settings
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.1  # Reduced pause for faster execution
 
-def get_user_options():
+TAB_DISTANCE = 36  # pixels between adjacent Safari pinned tabs; adjust to match your display
+
+def get_user_options() -> tuple[str, str, int | None]:
+    """Prompt the user for operation type, direction, and optional tab count.
+
+    Returns:
+        A tuple of (operation_type, direction_type, max_tabs) where operation_type is
+        'unpin' or 'close', direction_type is 'right_to_left' or 'left_to_right', and
+        max_tabs is a positive int cap or None for unlimited (right_to_left only).
+    """
     print("=== Safari Pinned Tab Options ===")
     print()
-    
+
     # Get operation type
     while True:
         operation = input("Choose operation: (1) Unpin tab (2) Close tab: ").strip()
@@ -24,7 +44,7 @@ def get_user_options():
             operation_type = 'unpin' if operation == '1' else 'close'
             break
         print("Please enter 1 or 2")
-    
+
     # Get direction
     while True:
         direction = input("Choose direction: (1) <-- Right to left (Recommended) (2) --> Left to right: ").strip()
@@ -32,46 +52,74 @@ def get_user_options():
             direction_type = 'right_to_left' if direction == '1' else 'left_to_right'
             break
         print("Please enter 1 or 2")
-    
+
+    # Get tab count — required for left_to_right (no geometric stop) to prevent runaway loop
+    if direction_type == 'left_to_right':
+        while True:
+            raw = input("How many pinned tabs to process? (enter a number): ").strip()
+            if raw.isdigit() and int(raw) > 0:
+                max_tabs = int(raw)
+                break
+            print("Please enter a positive number")
+    else:
+        while True:
+            raw = input("How many pinned tabs to process? (number, or ENTER for unlimited): ").strip()
+            if raw == "":
+                max_tabs = None
+                break
+            if raw.isdigit() and int(raw) > 0:
+                max_tabs = int(raw)
+                break
+            print("Please enter a positive number or press ENTER for unlimited")
+
     print()
     print(f"Operation: {operation_type.replace('_', ' ').title()}")
     print(f"Direction: {direction_type.replace('_', ' ').title()}")
+    print(f"Max tabs:  {max_tabs if max_tabs is not None else 'unlimited'}")
     print()
     print("Position your mouse where you want to start")
     print()
     print("To stop the automation at any time, press Ctrl+C in this terminal, or move your mouse to the top left of your screen")
     print()
-    
-    return operation_type, direction_type
 
-def main():
+    return operation_type, direction_type, max_tabs
+
+def main() -> None:
+    """Run the interactive automation loop for managing Safari pinned tabs.
+
+    Collects user preferences, waits for confirmation, then repeatedly
+    right-clicks each pinned tab and selects unpin or close until max_tabs is
+    reached, the user interrupts, or the loop reaches the screen edge (right-to-left).
+    """
     print()
     print("Starting FAST Safari Pinned Tabs Automation...")
     print()
-    
-    # Get user options
-    operation_type, direction_type = get_user_options()
-    
-    # Wait for user to be ready
-    input("Press ENTER when you're ready to start (after positioning your mouse)...")
-    
-    # Short countdown
-    print("Starting in 2...")
-    time.sleep(1)
-    print("1...")
-    time.sleep(1)
-    
-    if operation_type == 'close':
-        print("*** CLOSING PINNED TABS ***")
-    else:  # unpin
-        print("*** UNPINNING TABS ***")
-    
-    cycle = 0
-    tab_distance = 36  # Distance between Safari pinned tabs
-    
+
     try:
+        # Get user options
+        operation_type, direction_type, max_tabs = get_user_options()
+
+        # Wait for user to be ready
+        input("Press ENTER when you're ready to start (after positioning your mouse)...")
+
+        # Short countdown
+        print("Starting in 2...")
+        time.sleep(1)
+        print("1...")
+        time.sleep(1)
+
+        if operation_type == 'close':
+            print("*** CLOSING PINNED TABS ***")
+        else:  # unpin
+            print("*** UNPINNING TABS ***")
+
+        cycle = 0
+
         while True:
             cycle += 1
+            if max_tabs is not None and cycle > max_tabs:
+                print(f"\n✅ Processed {max_tabs} tab(s) — stopping")
+                break
             print(f"\n--- Cycle {cycle} ---")
             
             # Get current position
@@ -112,7 +160,7 @@ def main():
                 print("Not moving - tab action shifts remaining tabs left automatically")
             else:
                 # Normal movement for right_to_left
-                new_x = current_x - tab_distance
+                new_x = current_x - TAB_DISTANCE
                 if new_x < 0:
                     print(f"\n✅ Reached leftmost edge (next position {new_x}px is off-screen) — stopping")
                     break
@@ -127,7 +175,7 @@ def main():
     except pyautogui.FailSafeException:
         print("\n✅ Stopped — mouse moved to corner of screen (fail-safe triggered)")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error ({type(e).__name__}): {e}")
 
 if __name__ == "__main__":
     main()

@@ -14,12 +14,16 @@ Menu bar: a white pin by default (Icon color → classic 📌 / colors). While a
 in progress it shows "Space to stop" — Space (or a screen-corner slam) aborts.
 """
 
+from __future__ import annotations
+
 import os
 import re
 import json
 import time
+import shutil
 import threading
 import subprocess
+from typing import Any, Optional
 import urllib.request
 
 import rumps
@@ -36,6 +40,7 @@ from ApplicationServices import (
     AXIsProcessTrustedWithOptions,
     AXUIElementCreateApplication,
     AXUIElementCopyAttributeValue,
+    AXUIElementPerformAction,
     AXValueGetValue,
     kAXValueCGPointType,
     kAXValueCGSizeType,
@@ -85,25 +90,25 @@ ICON_OPTIONS = [
 # ============================================================================ #
 # Accessibility helpers
 # ============================================================================ #
-def accessibility_trusted():
+def accessibility_trusted() -> bool:
     return bool(AXIsProcessTrusted())
 
 
-def prompt_accessibility():
+def prompt_accessibility() -> bool:
     try:
         return bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}))
     except Exception:
         return False
 
 
-def open_accessibility_settings():
-    os.system(
-        "open 'x-apple.systempreferences:com.apple.preference.security"
-        "?Privacy_Accessibility'"
+def open_accessibility_settings() -> None:
+    subprocess.run(
+        ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
 
 
-def activate_safari():
+def activate_safari() -> None:
     """Bring Safari to the front AND onto the current Space. Plain `activate` won't
     switch Spaces — *simulating a Dock click* is the one path macOS lets carry you to
     a window on another Space (same technique as Jacob's morning calendar popup)."""
@@ -126,7 +131,7 @@ def activate_safari():
         pass
 
 
-def safari_window_on_screen():
+def safari_window_on_screen() -> bool:
     """True iff Safari has a real window on the CURRENT Space (on-screen).
 
     If Safari is on another Desktop/Space, `activate` may not switch to it (depends
@@ -153,7 +158,7 @@ def safari_window_on_screen():
 LAUNCH_AGENT = os.path.expanduser("~/Library/LaunchAgents/com.jacob.tidytab.plist")
 
 
-def _app_executable():
+def _app_executable() -> Optional[str]:
     res = os.environ.get("RESOURCEPATH")
     if res:  # …/TidyTab.app/Contents/Resources  →  …/TidyTab.app/Contents/MacOS/TidyTab
         contents = os.path.dirname(res)
@@ -161,11 +166,11 @@ def _app_executable():
     return None
 
 
-def login_item_enabled():
+def login_item_enabled() -> bool:
     return os.path.exists(LAUNCH_AGENT)
 
 
-def set_login_item(enabled):
+def set_login_item(enabled: bool) -> None:
     exe = _app_executable()
     if enabled and exe:
         os.makedirs(os.path.dirname(LAUNCH_AGENT), exist_ok=True)
@@ -188,7 +193,7 @@ def set_login_item(enabled):
 
 
 # --- Preferences (persist the chosen menu-bar colour across launches) -----------
-def load_prefs():
+def load_prefs() -> dict[str, Any]:
     try:
         with open(PREFS_PATH) as f:
             return json.load(f)
@@ -196,7 +201,7 @@ def load_prefs():
         return {}
 
 
-def save_prefs(d):
+def save_prefs(d: dict[str, Any]) -> None:
     try:
         os.makedirs(os.path.dirname(PREFS_PATH), exist_ok=True)
         with open(PREFS_PATH, "w") as f:
@@ -206,11 +211,11 @@ def save_prefs(d):
 
 
 # --- Update check (compare bundled VERSION to the latest GitHub release tag) -----
-def _ver_tuple(s):
+def _ver_tuple(s: Optional[str]) -> tuple[int, ...]:
     return tuple(int(x) for x in re.findall(r"\d+", s or "")[:3])
 
 
-def latest_release_version():
+def latest_release_version() -> Optional[str]:
     try:
         req = urllib.request.Request(RELEASES_API, headers={"User-Agent": "TidyTab"})
         data = json.load(urllib.request.urlopen(req, timeout=8))
@@ -222,33 +227,33 @@ def latest_release_version():
 # ============================================================================ #
 # Accessibility-API tab finder (read-only)
 # ============================================================================ #
-def _ax_attr(element, name):
+def _ax_attr(element: Any, name: str) -> Any:
     err, value = AXUIElementCopyAttributeValue(element, name, None)
     return value if err == 0 else None
 
 
-def _ax_point(value):
+def _ax_point(value: Any) -> Optional[tuple[float, float]]:
     if value is None:
         return None
     ok, pt = AXValueGetValue(value, kAXValueCGPointType, None)
     return (pt.x, pt.y) if ok else None
 
 
-def _ax_size(value):
+def _ax_size(value: Any) -> Optional[tuple[float, float]]:
     if value is None:
         return None
     ok, sz = AXValueGetValue(value, kAXValueCGSizeType, None)
     return (sz.width, sz.height) if ok else None
 
 
-def _safari_pid():
+def _safari_pid() -> Optional[int]:
     for app in NSWorkspace.sharedWorkspace().runningApplications():
         if app.bundleIdentifier() == "com.apple.Safari":
             return app.processIdentifier()
     return None
 
 
-def _collect_radio_buttons(element, out, depth=0, max_depth=14):
+def _collect_radio_buttons(element: Any, out: list, depth: int = 0, max_depth: int = 14) -> None:
     if depth > max_depth:
         return
     try:
@@ -260,7 +265,7 @@ def _collect_radio_buttons(element, out, depth=0, max_depth=14):
         pass
 
 
-def find_pinned_tabs():
+def find_pinned_tabs() -> list[tuple[Any, tuple[float, float]]]:
     """Return [(ax_element, (cx, cy)), ...] for Safari's pinned tabs, left→right; []
     if none/unreadable. The element lets us try a click-free close via AXPress."""
     pid = _safari_pid()
@@ -296,15 +301,14 @@ def find_pinned_tabs():
     return out
 
 
-def find_pinned_tab_centers():
+def find_pinned_tab_centers() -> list[tuple[float, float]]:
     return [c for _, c in find_pinned_tabs()]
 
 
-def close_tab_via_ax(element):
+def close_tab_via_ax(element: Any) -> bool:
     """Try to close a tab click-free by AXPress-ing its close button. Returns True on
     success, False if no close button was found (caller falls back to clicking)."""
     try:
-        from ApplicationServices import AXUIElementPerformAction
         for child in (_ax_attr(element, "AXChildren") or []):
             if _ax_attr(child, "AXRole") != "AXButton":
                 continue
@@ -320,13 +324,13 @@ def close_tab_via_ax(element):
 # ============================================================================ #
 # Menu-bar app
 # ============================================================================ #
-def _res(name):
+def _res(name: str) -> str:
     base = os.environ.get("RESOURCEPATH", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, name)
 
 
 class TidyTabApp(rumps.App):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(APP_NAME, quit_button=None)
 
         self._mode = ("auto", [])
@@ -372,15 +376,15 @@ class TidyTabApp(rumps.App):
         self._update_timer = rumps.Timer(lambda _t: self._auto_update_on_launch(), 14400)
         self._update_timer.start()     # …and re-check every ~4h for long-running sessions
 
-    def _toggle_login(self, sender):
+    def _toggle_login(self, sender: Any) -> None:
         sender.state = not sender.state
         set_login_item(bool(sender.state))
 
-    def _toggle_autoupdate(self, sender):
+    def _toggle_autoupdate(self, sender: Any) -> None:
         sender.state = not sender.state
         prefs = load_prefs(); prefs["auto_update"] = bool(sender.state); save_prefs(prefs)
 
-    def _load_saved_color(self):
+    def _load_saved_color(self) -> None:
         saved = load_prefs().get("color")
         if not saved or saved not in self._icon_map:
             return
@@ -392,7 +396,7 @@ class TidyTabApp(rumps.App):
         else:
             self._idle_icon, self._idle_title, self._idle_template = _res(fname), "", template
 
-    def _check_updates(self, _sender=None):
+    def _check_updates(self, _sender: Any = None) -> None:
         """Manual (menu) check — runs on the main thread so it shows a VISIBLE modal
         result (rumps notifications were silently not displaying)."""
         latest = latest_release_version()   # brief block; fine for a user-initiated click
@@ -402,11 +406,11 @@ class TidyTabApp(rumps.App):
         elif _ver_tuple(latest) > _ver_tuple(VERSION):
             if rumps.alert(APP_NAME, f"Update available: v{latest}.\nDownload and install now?",
                            ok="Update", cancel="Later") == 1:
-                self._do_self_update(latest)
+                threading.Thread(target=self._do_self_update, args=(latest,), daemon=True).start()
         else:
             rumps.alert(APP_NAME, f"You're on the latest version (v{VERSION}).")
 
-    def _auto_update_on_launch(self):
+    def _auto_update_on_launch(self) -> None:
         if not load_prefs().get("auto_update", True):
             return
 
@@ -421,17 +425,20 @@ class TidyTabApp(rumps.App):
             self._do_self_update(latest)
         threading.Thread(target=work, daemon=True).start()
 
-    def _do_self_update(self, latest):
+    def _do_self_update(self, latest: str) -> None:
         """Download the latest notarized dmg, verify its signature, swap it into
         /Applications, and relaunch. Guarded against update loops + bad downloads."""
+        dmg = "/tmp/TidyTab_update.dmg"
         try:
-            import shutil
             rumps.notification(APP_NAME, f"Updating to v{latest}…",
                                "Downloading — TidyTab will relaunch.")
             prefs = load_prefs(); prefs["update_attempted"] = latest; save_prefs(prefs)
-            dmg = "/tmp/TidyTab_update.dmg"
-            urllib.request.urlretrieve(
-                f"https://github.com/{REPO}/releases/latest/download/TidyTab.dmg", dmg)
+            req = urllib.request.Request(
+                f"https://github.com/{REPO}/releases/latest/download/TidyTab.dmg",
+                headers={"User-Agent": "TidyTab"},
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp, open(dmg, "wb") as fh:
+                shutil.copyfileobj(resp, fh)
             mnt = "/tmp/tidytab_update_mnt"
             subprocess.run(["hdiutil", "detach", mnt],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # clear any stale mount
@@ -440,14 +447,20 @@ class TidyTabApp(rumps.App):
             src = os.path.join(mnt, "TidyTab.app")
             ok = os.path.exists(src) and subprocess.run(
                 ["codesign", "--verify", "--quiet", src]).returncode == 0
-            if ok:
-                staging = "/Applications/.TidyTab.new"
-                shutil.rmtree(staging, ignore_errors=True)
-                shutil.copytree(src, staging)
-                shutil.rmtree("/Applications/TidyTab.app", ignore_errors=True)
-                os.rename(staging, "/Applications/TidyTab.app")
-            subprocess.run(["hdiutil", "detach", mnt],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                if ok:
+                    staging = "/Applications/.TidyTab.new"
+                    shutil.rmtree(staging, ignore_errors=True)
+                    shutil.copytree(src, staging)
+                    shutil.rmtree("/Applications/TidyTab.app", ignore_errors=True)
+                    os.rename(staging, "/Applications/TidyTab.app")
+            finally:
+                subprocess.run(["hdiutil", "detach", mnt],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    os.unlink(dmg)
+                except OSError:
+                    pass
             if ok:
                 subprocess.Popen(["open", "/Applications/TidyTab.app"])
                 rumps.quit_application()
@@ -455,9 +468,13 @@ class TidyTabApp(rumps.App):
                 rumps.notification(APP_NAME, "Update skipped",
                                    "The downloaded update failed verification — try again later.")
         except Exception as exc:
+            try:
+                os.unlink(dmg)
+            except OSError:
+                pass
             rumps.notification(APP_NAME, "Update failed", str(exc))
 
-    def _start_hotkey_monitor(self):
+    def _start_hotkey_monitor(self) -> None:
         # Always-on global hotkeys: ⌘⌥U = Unpin, ⌘⌥K = Close (no need to open the menu).
         if self._hotkey_monitor is not None:
             return
@@ -479,7 +496,7 @@ class TidyTabApp(rumps.App):
         )
 
     # ---- icon color submenu ----------------------------------------------- #
-    def _build_color_menu(self):
+    def _build_color_menu(self) -> rumps.MenuItem:
         color_menu = rumps.MenuItem("Icon color")
         self._icon_items = []
         self._icon_map = {}
@@ -491,7 +508,7 @@ class TidyTabApp(rumps.App):
         self._icon_items[0].state = True  # White (default)
         return color_menu
 
-    def _apply_idle(self):
+    def _apply_idle(self) -> None:
         if self._idle_icon is None:           # classic 📌 emoji
             self.icon = None
             self.title = self._idle_title
@@ -513,7 +530,7 @@ class TidyTabApp(rumps.App):
             except Exception:
                 pass
 
-    def _set_icon(self, sender):
+    def _set_icon(self, sender: Any) -> None:
         for it in self._icon_items:
             it.state = (it is sender)
         fname, template = self._icon_map[sender.title]
@@ -521,12 +538,12 @@ class TidyTabApp(rumps.App):
             self._idle_icon, self._idle_title, self._idle_template = None, "📌", False
         else:
             self._idle_icon, self._idle_title, self._idle_template = _res(fname), "", template
-        save_prefs({"color": sender.title})   # persist across launches
+        prefs = load_prefs(); prefs["color"] = sender.title; save_prefs(prefs)
         if not (self._worker and self._worker.is_alive()):
             self._apply_idle()
 
     # ---- launch / permission ---------------------------------------------- #
-    def _launch_accessibility_check(self, timer):
+    def _launch_accessibility_check(self, timer: Any) -> None:
         timer.stop()
         if not load_prefs().get("onboarded"):
             self._onboard()                 # first launch → friendly walkthrough
@@ -537,7 +554,7 @@ class TidyTabApp(rumps.App):
                 "read and control Safari's tabs.",
             )
 
-    def _onboard(self):
+    def _onboard(self) -> None:
         prefs = load_prefs(); prefs["onboarded"] = True; save_prefs(prefs)
         resp = rumps.alert(
             title=f"Welcome to {APP_NAME} 📌",
@@ -555,20 +572,20 @@ class TidyTabApp(rumps.App):
             prompt_accessibility()
             open_accessibility_settings()
 
-    def _grant_accessibility(self, _sender):
+    def _grant_accessibility(self, _sender: Any) -> None:
         prompt_accessibility()
         open_accessibility_settings()
 
     # ---- run / stop -------------------------------------------------------- #
-    def _run_unpin(self, _sender):
+    def _run_unpin(self, _sender: Any) -> None:
         self._operation = "unpin"
         self._start()
 
-    def _run_close(self, _sender):
+    def _run_close(self, _sender: Any) -> None:
         self._operation = "close"
         self._start()
 
-    def _start(self):
+    def _start(self) -> None:
         if self._worker and self._worker.is_alive():
             rumps.notification(APP_NAME, "Already running",
                                "Press Space to stop the current run.")
@@ -638,34 +655,34 @@ class TidyTabApp(rumps.App):
         self._worker = threading.Thread(target=self._automation_loop, daemon=True)
         self._worker.start()
 
-    def _stop(self, _sender):
+    def _stop(self, _sender: Any) -> None:
         self._stop_flag.set()
 
-    def _quit(self, _sender):
+    def _quit(self, _sender: Any) -> None:
         self._stop_flag.set()
         self._stop_space_monitor()
         rumps.quit_application()
 
     # ---- running-state UI -------------------------------------------------- #
-    def _begin_running_ui(self):
+    def _begin_running_ui(self) -> None:
         self.title = "  Space/Esc to stop"
         self._start_space_monitor()
         if self._watchdog is None:
             self._watchdog = rumps.Timer(self._check_done, 0.4)
             self._watchdog.start()
 
-    def _end_running_ui(self):
+    def _end_running_ui(self) -> None:
         self._apply_idle()
         self._stop_space_monitor()
         if self._watchdog is not None:
             self._watchdog.stop()
             self._watchdog = None
 
-    def _check_done(self, _timer):
+    def _check_done(self, _timer: Any) -> None:
         if self._worker is None or not self._worker.is_alive():
             self._end_running_ui()
 
-    def _start_space_monitor(self):
+    def _start_space_monitor(self) -> None:
         if self._space_monitor is not None:
             return
 
@@ -680,13 +697,13 @@ class TidyTabApp(rumps.App):
             NSEventMaskKeyDown, handler
         )
 
-    def _stop_space_monitor(self):
+    def _stop_space_monitor(self) -> None:
         if self._space_monitor is not None:
             NSEvent.removeMonitor_(self._space_monitor)
             self._space_monitor = None
 
     # ---- the work ---------------------------------------------------------- #
-    def _tidy_one(self, x, y, operation):
+    def _tidy_one(self, x: float, y: float, operation: str) -> None:
         pyautogui.moveTo(x, y, duration=0.08)
         pyautogui.click()
         time.sleep(0.1)
@@ -700,7 +717,7 @@ class TidyTabApp(rumps.App):
         pyautogui.press("enter")
         time.sleep(0.15)
 
-    def _automation_loop(self):
+    def _automation_loop(self) -> None:
         _, centers = self._mode
         operation = self._operation
         try:

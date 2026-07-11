@@ -55,15 +55,18 @@ python safari_pinned_tab_automation.py
 3. Choose direction:
    - `1` for <-- Right to left (Recommended)
    - `2` for --> Left to right
-4. Position your mouse on the first pinned tab
-5. Press ENTER to start
-6. Press Ctrl+C to stop anytime
+4. Enter how many pinned tabs to process:
+   - Left-to-right mode: required (enter a number — prevents runaway loop)
+   - Right-to-left mode: press ENTER for unlimited, or enter a number to cap
+5. Position your mouse on the first pinned tab
+6. Press ENTER to start
+7. Press Ctrl+C to stop anytime
 
 ## ⚙️ Configuration
 
 Adjust these settings in `safari_pinned_tab_automation.py`:
 
-- `tab_distance`: Distance between Safari pinned tabs (default: 36 pixels)
+- `TAB_DISTANCE`: Distance between Safari pinned tabs (default: 36 pixels)
 - `pyautogui.PAUSE`: Global pause between actions (default: 0.1 seconds)
 
 ## 🛡️ Safety Features
