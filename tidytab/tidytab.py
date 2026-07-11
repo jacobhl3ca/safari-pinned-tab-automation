@@ -428,11 +428,11 @@ class TidyTabApp(rumps.App):
     def _do_self_update(self, latest: str) -> None:
         """Download the latest notarized dmg, verify its signature, swap it into
         /Applications, and relaunch. Guarded against update loops + bad downloads."""
+        dmg = "/tmp/TidyTab_update.dmg"
         try:
             rumps.notification(APP_NAME, f"Updating to v{latest}…",
                                "Downloading — TidyTab will relaunch.")
             prefs = load_prefs(); prefs["update_attempted"] = latest; save_prefs(prefs)
-            dmg = "/tmp/TidyTab_update.dmg"
             req = urllib.request.Request(
                 f"https://github.com/{REPO}/releases/latest/download/TidyTab.dmg",
                 headers={"User-Agent": "TidyTab"},
@@ -468,6 +468,10 @@ class TidyTabApp(rumps.App):
                 rumps.notification(APP_NAME, "Update skipped",
                                    "The downloaded update failed verification — try again later.")
         except Exception as exc:
+            try:
+                os.unlink(dmg)
+            except OSError:
+                pass
             rumps.notification(APP_NAME, "Update failed", str(exc))
 
     def _start_hotkey_monitor(self) -> None:
