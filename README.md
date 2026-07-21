@@ -1,105 +1,102 @@
-# Safari Pinned Tab Automation
+# TidyTab 📌
 
-A Python automation script for macOS that efficiently manages Safari pinned tabs. Perfect for bulk operations when you need to unpin or close multiple pinned tabs quickly.
+A tiny **macOS menu-bar app** that bulk **unpins** or **closes** your Safari pinned
+tabs — one command instead of right-clicking through them one at a time.
 
-## 💡 Why This Exists
+**[tidytab.jacobhl.com](https://tidytab.jacobhl.com)** · Developer ID-signed and
+Apple-notarized · free.
 
-Safari doesn't support batch unpin natively, and unpinning a tab causes remaining pinned tabs to shift position, breaking forward navigation. Simple sequential automation (right-click, unpin, move to next) fails because after each unpin, the tabs slide left and your cursor lands on the wrong tab. Closing pinned tabs has a similar issue — the context menu option count differs from unpinning, so the same automation can't handle both without accounting for that. This script solves these quirks with bidirectional navigation (left-to-right lets tabs auto-shift toward the cursor, right-to-left manually moves to each next tab) and separate handling for unpin vs. close operations.
+> This repo started life as the interactive CLI script that solved the problem
+> (`safari_pinned_tab_automation.py`, still here — see [Origins](#-origins)).
+> TidyTab is that idea as a real, shippable app, and is what you probably want.
 
-## 🚀 Features
+---
 
-- **Dual Operations**: Support for both unpinning and closing pinned tabs
-- **Bidirectional Navigation**: Work left-to-right or right-to-left
-- **Smart Movement**: Automatically handles tab position shifts during operations
-- **Auto-Stop at Edge**: Right-to-left mode halts automatically when the leftmost pinned tab is reached
-- **User-Friendly Interface**: Clear prompts and visual indicators
-- **Fast Execution**: Optimized timing for quick tab management
+## 📦 Install
 
-## 📋 How It Works
+**Download the app** — [TidyTab.dmg](https://github.com/jacobhl3ca/safari-pinned-tab-automation/releases/latest/download/TidyTab.dmg)
+(always the latest release), open it, drag TidyTab to Applications.
 
-### Operations
-1. **Unpin Tab**: Removes the pin status from tabs (1 down arrow press)
-2. **Close Tab**: Completely closes pinned tabs (3 down arrow presses)
+**Or with Homebrew:**
 
-### Direction Logic
-- **Left to Right**: Mouse stays in position - tabs automatically shift left when processed
-- **Right to Left**: Mouse moves left to each next tab manually
-
-## 🛠️ Setup
-
-1. Clone or download the repository
-2. Create and activate virtual environment:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-## 🎯 Usage
-
-### Quick Start
 ```bash
-cd /path/to/project
-source venv/bin/activate
+brew install --cask jacobhl3ca/tap/tidytab
+```
+
+Both paths install the same signed, notarized build, so macOS opens it without a
+Gatekeeper detour. The app checks GitHub for newer releases and can update itself.
+
+### One-time permission
+
+TidyTab needs **Accessibility** permission — that's how it reads Safari's tab
+positions and drives the clicks. It prompts on first run; if you'd rather do it up
+front: **System Settings → Privacy & Security → Accessibility → enable TidyTab**.
+Without it macOS silently drops everything the app does and it will look broken.
+
+---
+
+## 🚀 Using it
+
+Two commands, from the menu-bar dropdown or from anywhere via a global hotkey:
+
+| Command | Hotkey | What it does |
+| --- | --- | --- |
+| **Unpin pinned tabs** | <kbd>⌘⌥U</kbd> | Tabs stay open, just no longer pinned |
+| **Close pinned tabs** | <kbd>⌘⌥K</kbd> | Closes them outright |
+
+It finds the pinned tabs in the **front Safari window** by itself, tells you how
+many it found, and waits for you to confirm before it touches anything. Mid-run,
+<kbd>Space</kbd>, <kbd>Esc</kbd>, or slamming the mouse into a screen corner stops
+it immediately.
+
+Also in the menu: **Launch at login**, **Auto-update on launch**, an **icon colour**
+picker for the menu-bar pin, and **Check for Updates…**.
+
+### How it works
+
+Safari has no batch-unpin, and unpinning shifts the remaining tabs left — so blind
+"click, unpin, move right 36px" automation lands on the wrong tab. TidyTab locates
+each pinned tab through the macOS **Accessibility API** instead of assuming a fixed
+spacing, then for each one: left-click → right-click for the context menu → arrow
+down to *Unpin* (1×) or *Close* (3×) → Enter.
+
+It refuses to click at all if it can't find the tabs, if Safari isn't running, or if
+Safari's window is on another Space — so it can never fire clicks into the wrong app.
+
+---
+
+## 🛠 Build from source
+
+The app lives in [`tidytab/`](tidytab/) — a [rumps](https://github.com/jaredks/rumps)
+menu-bar app packaged with py2app. See **[tidytab/README.md](tidytab/README.md)** to
+run it in dev mode and build the `.app`, and **[tidytab/DISTRIBUTION.md](tidytab/DISTRIBUTION.md)**
+for the codesign + notarization recipe.
+
+Requirements: macOS, Python 3.9+, Safari.
+
+---
+
+## 🕰 Origins
+
+[`safari_pinned_tab_automation.py`](safari_pinned_tab_automation.py) is the original
+interactive terminal script — the same trick, run from a prompt, with a
+`tab_distance` you tune by hand. It's kept here because it's where this came from and
+it still works if you want the dependency-free version:
+
+```bash
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
 python safari_pinned_tab_automation.py
 ```
 
-### Step-by-Step
-1. Run the script
-2. Choose your operation:
-   - `1` for Unpin Tab
-   - `2` for Close Tab
-3. Choose direction:
-   - `1` for <-- Right to left (Recommended)
-   - `2` for --> Left to right
-4. Position your mouse on the first pinned tab
-5. Press ENTER to start
-6. Press Ctrl+C to stop anytime
+It asks for operation (unpin/close) and direction (left-to-right lets the tabs shift
+under a parked cursor; right-to-left steps the mouse), then you park the pointer on
+the first pinned tab and press ENTER. <kbd>Ctrl-C</kbd> or a screen corner stops it.
+The app supersedes it — notably by detecting the tabs rather than assuming 36px
+spacing.
 
-## ⚙️ Configuration
-
-Adjust these settings in `safari_pinned_tab_automation.py`:
-
-- `tab_distance`: Distance between Safari pinned tabs (default: 36 pixels)
-- `pyautogui.PAUSE`: Global pause between actions (default: 0.1 seconds)
-
-## 🛡️ Safety Features
-
-- **Emergency Stop**: Move mouse to top-left corner of screen
-- **Failsafe**: PyAutoGUI's built-in protection
-- **Auto-Stop at Edge**: In right-to-left mode, the loop exits when the next move would go off-screen
-- **User Confirmation**: Must press ENTER to start
-
-## 📦 Requirements
-
-- macOS
-- Python 3.6+
-- Safari browser
-- Accessibility permissions for Terminal/Python (prompted on first run)
-
-## 🔧 Dependencies
-
-- `pyautogui` - Mouse and keyboard automation
-
-## 🐛 Troubleshooting
-
-**Script Not Working**:
-- Check that mouse is positioned correctly on first tab before pressing ENTER
-- Verify tab distance matches your Safari setup
-
-**Stop Method**:
-- **Mouse Stop**: Move mouse to top-left corner of screen
-
-**Auto-Stop Triggered Early**:
-- If the loop stops before reaching your leftmost tab, your `tab_distance` may be wider than the actual spacing — lower it in the script
+---
 
 ## 📄 License
 
-MIT License - feel free to use and modify for your own automation needs!
-
-## 🤝 Contributing
-
-Issues and pull requests are welcome! This is a practical automation tool for everyday Safari users.
+MIT — use and modify freely.
