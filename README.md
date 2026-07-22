@@ -49,8 +49,9 @@ many it found, and waits for you to confirm before it touches anything. Mid-run,
 <kbd>Space</kbd>, <kbd>Esc</kbd>, or slamming the mouse into a screen corner stops
 it immediately.
 
-Also in the menu: **Launch at login**, **Auto-update on launch**, an **icon colour**
-picker for the menu-bar pin, and **Check for Updates…**.
+Also in the menu: **Stop** (with its <kbd>Space</kbd> / <kbd>Esc</kbd> shortcut shown),
+**Launch at login**, **Auto-update on launch**, and **Check for Updates…**. A
+**Grant Accessibility…** item appears only while that permission is missing.
 
 ### How it works
 
