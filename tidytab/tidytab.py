@@ -10,8 +10,8 @@ can't read the tabs it offers a manual fallback.
 ⚠️  Requires Accessibility permission (System Settings → Privacy & Security →
     Accessibility). Without it macOS blocks the app from reading/controlling Safari.
 
-Menu bar: a white pin by default (Icon color → classic 📌 / colors). While a run is
-in progress it shows "Space to stop" — Space (or a screen-corner slam) aborts.
+Menu bar: a white pin that adapts to the bar (light/dark). While a run is in
+progress it shows "Space to stop" — Space (or a screen-corner slam) aborts.
 """
 
 import os
@@ -25,7 +25,8 @@ import urllib.request
 import rumps
 import pyautogui
 
-from AppKit import NSEvent, NSWorkspace
+from AppKit import NSApplication, NSEvent, NSWorkspace
+from PyObjCTools.AppHelper import callAfter
 try:
     from AppKit import NSEventMaskKeyDown
 except ImportError:
@@ -44,7 +45,7 @@ from ApplicationServices import (
 
 # --- App identity (rename the app by changing this ONE constant) ---------------
 APP_NAME = "TidyTab"
-VERSION = "1.1.5"
+VERSION = "1.1.6"
 
 PREFS_PATH = os.path.expanduser("~/Library/Application Support/TidyTab/prefs.json")
 REPO = "jacobhl3ca/safari-pinned-tab-automation"
@@ -62,24 +63,16 @@ ESC_KEYCODE = 53
 PINNED_MAX_WIDTH = 72
 ICON_DIM = (20, 20)         # menu-bar icon FOOTPRINT in points = rumps' own default (NSStatusItem fits a
                             # template image to the ~22pt bar regardless). The visible pin SIZE is controlled
-                            # by transparent padding baked into the menubar_*.png art (~70% ink, ~30% margin),
-                            # so the pin's ink lands ~14pt — flush with neighbor SF-Symbol glyphs. Keeping this
-                            # at rumps' default 20pt means the colour-swap repaint path can't shrink the icon.
+                            # by transparent padding baked into menubar_white.png (~70% ink, ~30% margin),
+                            # so the pin's ink lands ~14pt — flush with neighbor SF-Symbol glyphs.
 
-# Icon-color options: (label, silhouette file or None for the full-colour emoji, template?)
-# The flat colour tints come first; the realistic emoji pin sits at the bottom since
-# it isn't a colour like the others.
-ICON_OPTIONS = [
-    ("White", "menubar_white.png", True),       # default; template adapts to the bar
-    ("Red", "menubar_red.png", False),
-    ("Orange", "menubar_orange.png", False),
-    ("Yellow", "menubar_yellow.png", False),
-    ("Green", "menubar_green.png", False),
-    ("Blue", "menubar_blue.png", False),
-    ("Purple", "menubar_purple.png", False),
-    ("Pink", "menubar_pink.png", False),
-    ("Real 📌", None, False),                    # the full-colour emoji pin (not a flat tint)
-]
+# Menu labels for the two actions + Stop, with their shortcuts shown inline so the
+# hotkeys are discoverable from the menu itself (rumps can't set real key equivalents
+# on a status-bar menu, so the shortcut lives in the title text).
+UNPIN_TITLE = "Unpin pinned tabs  (⌘⌥U)"
+CLOSE_TITLE = "Close pinned tabs  (⌘⌥K)"
+STOP_TITLE = "Stop  (Space / Esc)"
+GRANT_TITLE = "Grant Accessibility…"
 
 
 # ============================================================================ #
@@ -336,9 +329,8 @@ class TidyTabApp(rumps.App):
         self._space_monitor = None
         self._watchdog = None
 
-        # Idle menu-bar look (restored after a run); default = white pin.
+        # Idle menu-bar look (restored after a run): the white template pin.
         self._idle_icon = _res("menubar_white.png")
-        self._idle_title = ""
         self._idle_template = True
 
         self._login_item = rumps.MenuItem("Launch at login", callback=self._toggle_login)
@@ -346,22 +338,26 @@ class TidyTabApp(rumps.App):
         self._autoupdate_item = rumps.MenuItem("Auto-update on launch", callback=self._toggle_autoupdate)
         self._autoupdate_item.state = load_prefs().get("auto_update", True)
 
-        # Two explicit actions (no hidden mode) — clear what each does.
+        # Two explicit actions (no hidden mode) — clear what each does. Every
+        # action carries its shortcut in the label.
         self.menu = [
-            rumps.MenuItem("Unpin pinned tabs  (⌘⌥U)", callback=self._run_unpin),
-            rumps.MenuItem("Close pinned tabs  (⌘⌥K)", callback=self._run_close),
-            rumps.MenuItem("Stop", callback=self._stop),
+            rumps.MenuItem(UNPIN_TITLE, callback=self._run_unpin),
+            rumps.MenuItem(CLOSE_TITLE, callback=self._run_close),
+            rumps.MenuItem(STOP_TITLE, callback=self._stop),
             None,
-            self._build_color_menu(),
             self._login_item,
             self._autoupdate_item,
-            rumps.MenuItem("Grant Accessibility…", callback=self._grant_accessibility),
             None,
             rumps.MenuItem(f"Check for Updates…  (v{VERSION})", callback=self._check_updates),
             rumps.MenuItem("Quit", callback=self._quit),
         ]
 
-        self._load_saved_color()   # restore the menu-bar colour chosen last time
+        # "Grant Accessibility…" is setup-only: it appears just while the permission
+        # is missing (see _sync_accessibility_item).
+        self._sync_accessibility_item()
+        self._grant_timer = rumps.Timer(self._sync_accessibility_item, 5)
+        self._grant_timer.start()
+
         self._apply_idle()
 
         self._launch_check = rumps.Timer(self._launch_accessibility_check, 1.0)
@@ -380,31 +376,71 @@ class TidyTabApp(rumps.App):
         sender.state = not sender.state
         prefs = load_prefs(); prefs["auto_update"] = bool(sender.state); save_prefs(prefs)
 
-    def _load_saved_color(self):
-        saved = load_prefs().get("color")
-        if not saved or saved not in self._icon_map:
-            return
-        for it in self._icon_items:
-            it.state = (it.title == saved)
-        fname, template = self._icon_map[saved]
-        if fname is None:
-            self._idle_icon, self._idle_title, self._idle_template = None, "📌", False
-        else:
-            self._idle_icon, self._idle_title, self._idle_template = _res(fname), "", template
+    def _sync_accessibility_item(self, _timer=None):
+        """Show "Grant Accessibility…" ONLY while the permission is missing.
+
+        It's one-time setup, so it's noise in the menu once granted — but it has to
+        come BACK on its own if macOS ever drops the grant (a self-update swaps the
+        whole .app bundle, which can invalidate it), otherwise the app looks broken
+        with no way to fix it from the menu.
+        """
+        try:
+            needed = not accessibility_trusted()
+            present = GRANT_TITLE in self.menu
+            if needed and not present:
+                self.menu.insert_after(
+                    self._autoupdate_item.title,
+                    rumps.MenuItem(GRANT_TITLE, callback=self._grant_accessibility),
+                )
+            elif present and not needed:
+                del self.menu[GRANT_TITLE]
+        except Exception:
+            pass
+
+    # ---- main-thread UI helpers -------------------------------------------- #
+    def _alert(self, *args, **kwargs):
+        """rumps.alert, but activate the app first.
+
+        TidyTab is LSUIElement (no Dock icon), so its windows do NOT come forward
+        on their own: an un-activated modal draws in the background app state —
+        it animates in sluggishly, redraws lazily and swallows the first click.
+        Activating first makes every dialog a normal, snappy, key window.
+        Must be called on the MAIN thread.
+        """
+        try:
+            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        except Exception:
+            pass
+        return rumps.alert(*args, **kwargs)
+
+    def _notify(self, title, subtitle, message):
+        """Post a notification from ANY thread — Cocoa UI must be touched on the
+        main thread, and firing NSUserNotification off a worker thread is what
+        made update banners appear late / stutter."""
+        callAfter(rumps.notification, title, subtitle, message)
 
     def _check_updates(self, _sender=None):
-        """Manual (menu) check — runs on the main thread so it shows a VISIBLE modal
-        result (rumps notifications were silently not displaying)."""
-        latest = latest_release_version()   # brief block; fine for a user-initiated click
+        """Manual (menu) check.
+
+        The GitHub fetch runs on a BACKGROUND thread: doing it inline blocked the
+        main run loop for up to 8s (DNS + TLS + request), which froze the menu bar
+        and made the result dialog crawl in. The answer is marshalled back to the
+        main thread to be shown."""
+        def work():
+            latest = latest_release_version()
+            callAfter(self._show_update_result, latest)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_update_result(self, latest):
         if latest is None:
-            rumps.alert(APP_NAME, "Couldn't reach GitHub to check for updates. "
+            self._alert(APP_NAME, "Couldn't reach GitHub to check for updates. "
                                   "Check your connection and try again.")
         elif _ver_tuple(latest) > _ver_tuple(VERSION):
-            if rumps.alert(APP_NAME, f"Update available: v{latest}.\nDownload and install now?",
+            if self._alert(APP_NAME, f"Update available: v{latest}.\nDownload and install now?",
                            ok="Update", cancel="Later") == 1:
-                self._do_self_update(latest)
+                threading.Thread(target=self._do_self_update, args=(latest,), daemon=True).start()
         else:
-            rumps.alert(APP_NAME, f"You're on the latest version (v{VERSION}).")
+            self._alert(APP_NAME, f"You're on the latest version (v{VERSION}).")
 
     def _auto_update_on_launch(self):
         if not load_prefs().get("auto_update", True):
@@ -415,8 +451,8 @@ class TidyTabApp(rumps.App):
             if not (latest and _ver_tuple(latest) > _ver_tuple(VERSION)):
                 return
             if load_prefs().get("update_attempted") == latest:   # tried + still behind → don't loop
-                rumps.notification(APP_NAME, f"Update v{latest} available",
-                                   "Auto-update didn't apply — use “Check for Updates…”.")
+                self._notify(APP_NAME, f"Update v{latest} available",
+                             "Auto-update didn't apply — use “Check for Updates…”.")
                 return
             self._do_self_update(latest)
         threading.Thread(target=work, daemon=True).start()
@@ -426,8 +462,8 @@ class TidyTabApp(rumps.App):
         /Applications, and relaunch. Guarded against update loops + bad downloads."""
         try:
             import shutil
-            rumps.notification(APP_NAME, f"Updating to v{latest}…",
-                               "Downloading — TidyTab will relaunch.")
+            self._notify(APP_NAME, f"Updating to v{latest}…",
+                         "Downloading — TidyTab will relaunch.")
             prefs = load_prefs(); prefs["update_attempted"] = latest; save_prefs(prefs)
             dmg = "/tmp/TidyTab_update.dmg"
             urllib.request.urlretrieve(
@@ -450,12 +486,12 @@ class TidyTabApp(rumps.App):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if ok:
                 subprocess.Popen(["open", "/Applications/TidyTab.app"])
-                rumps.quit_application()
+                callAfter(rumps.quit_application)
             else:
-                rumps.notification(APP_NAME, "Update skipped",
-                                   "The downloaded update failed verification — try again later.")
+                self._notify(APP_NAME, "Update skipped",
+                             "The downloaded update failed verification — try again later.")
         except Exception as exc:
-            rumps.notification(APP_NAME, "Update failed", str(exc))
+            self._notify(APP_NAME, "Update failed", str(exc))
 
     def _start_hotkey_monitor(self):
         # Always-on global hotkeys: ⌘⌥U = Unpin, ⌘⌥K = Close (no need to open the menu).
@@ -478,52 +514,24 @@ class TidyTabApp(rumps.App):
             NSEventMaskKeyDown, handler
         )
 
-    # ---- icon color submenu ----------------------------------------------- #
-    def _build_color_menu(self):
-        color_menu = rumps.MenuItem("Icon color")
-        self._icon_items = []
-        self._icon_map = {}
-        for label, fname, template in ICON_OPTIONS:
-            it = rumps.MenuItem(label, callback=self._set_icon)
-            self._icon_items.append(it)
-            self._icon_map[label] = (fname, template)
-            color_menu.add(it)
-        self._icon_items[0].state = True  # White (default)
-        return color_menu
-
     def _apply_idle(self):
-        if self._idle_icon is None:           # classic 📌 emoji
-            self.icon = None
-            self.title = self._idle_title
-        else:                                 # tinted pin image (resized to ICON_DIM)
-            self.template = self._idle_template
-            self.icon = self._idle_icon
-            self.title = ""
-            # Force the live status item to image-only. rumps' fallbackOnName() can
-            # leave the app name ("TidyTab") next to the pin when title+image are
-            # briefly both empty during a colour swap; setting the image + clearing
-            # the title LAST guarantees just the icon shows.
-            try:
-                img = self._icon_nsimage
-                item = getattr(getattr(self, "_nsapp", None), "nsstatusitem", None)
-                if img is not None and item is not None:
-                    img.setSize_(ICON_DIM)
-                    item.setImage_(img)
-                    item.setTitle_("")
-            except Exception:
-                pass
-
-    def _set_icon(self, sender):
-        for it in self._icon_items:
-            it.state = (it is sender)
-        fname, template = self._icon_map[sender.title]
-        if fname is None:
-            self._idle_icon, self._idle_title, self._idle_template = None, "📌", False
-        else:
-            self._idle_icon, self._idle_title, self._idle_template = _res(fname), "", template
-        save_prefs({"color": sender.title})   # persist across launches
-        if not (self._worker and self._worker.is_alive()):
-            self._apply_idle()
+        """Restore the idle look: the white template pin, no title."""
+        self.template = self._idle_template
+        self.icon = self._idle_icon
+        self.title = ""
+        # Force the live status item to image-only. rumps' fallbackOnName() can
+        # leave the app name ("TidyTab") next to the pin when title+image are
+        # briefly both empty; setting the image + clearing the title LAST
+        # guarantees just the icon shows.
+        try:
+            img = self._icon_nsimage
+            item = getattr(getattr(self, "_nsapp", None), "nsstatusitem", None)
+            if img is not None and item is not None:
+                img.setSize_(ICON_DIM)
+                item.setImage_(img)
+                item.setTitle_("")
+        except Exception:
+            pass
 
     # ---- launch / permission ---------------------------------------------- #
     def _launch_accessibility_check(self, timer):
@@ -531,7 +539,7 @@ class TidyTabApp(rumps.App):
         if not load_prefs().get("onboarded"):
             self._onboard()                 # first launch → friendly walkthrough
         elif not accessibility_trusted():
-            rumps.notification(
+            self._notify(
                 APP_NAME, "Accessibility permission needed",
                 "Enable TidyTab in Privacy & Security → Accessibility so it can "
                 "read and control Safari's tabs.",
@@ -539,7 +547,7 @@ class TidyTabApp(rumps.App):
 
     def _onboard(self):
         prefs = load_prefs(); prefs["onboarded"] = True; save_prefs(prefs)
-        resp = rumps.alert(
+        resp = self._alert(
             title=f"Welcome to {APP_NAME} 📌",
             message=(
                 "TidyTab clears your Safari pinned tabs in one sweep.\n\n"
@@ -570,20 +578,20 @@ class TidyTabApp(rumps.App):
 
     def _start(self):
         if self._worker and self._worker.is_alive():
-            rumps.notification(APP_NAME, "Already running",
-                               "Press Space to stop the current run.")
+            self._notify(APP_NAME, "Already running",
+                         "Press Space to stop the current run.")
             return
         if not accessibility_trusted():
             prompt_accessibility()
             open_accessibility_settings()
-            rumps.alert(
+            self._alert(
                 f"{APP_NAME} needs Accessibility",
                 "Enable TidyTab under Privacy & Security → Accessibility, then try again.",
             )
             return
 
         if _safari_pid() is None:
-            rumps.alert(APP_NAME,
+            self._alert(APP_NAME,
                         "Safari isn't running. Open Safari with some pinned tabs, then try again.")
             return
 
@@ -595,7 +603,7 @@ class TidyTabApp(rumps.App):
         # If Safari is on a DIFFERENT Space and macOS didn't switch to it, its window
         # isn't on-screen — refuse to click rather than click into whatever IS here.
         if not safari_window_on_screen():
-            rumps.alert(
+            self._alert(
                 f"{APP_NAME}: Safari is on another Space",
                 "Safari's window is on a different desktop/Space and macOS didn't switch "
                 "to it, so TidyTab won't click. Switch to the Safari window yourself (or "
@@ -613,7 +621,7 @@ class TidyTabApp(rumps.App):
             centers = []
 
         if not centers:
-            rumps.alert(
+            self._alert(
                 f"{APP_NAME}: no pinned tabs found",
                 "Couldn't find pinned tabs in the front Safari window. Make sure Safari "
                 "is open with pinned tabs (and TidyTab has Accessibility permission), "
@@ -623,7 +631,7 @@ class TidyTabApp(rumps.App):
 
         n = len(centers)
         tabs_word = "tab" if n == 1 else "tabs"
-        ok = rumps.alert(
+        ok = self._alert(
             title=f"{op_label} {n} pinned {tabs_word}?",
             message=(f"TidyTab will {op_label.lower()} {n} pinned {tabs_word} in "
                      "Safari.\n\nPress Space or Esc to stop mid-run."),
@@ -719,8 +727,8 @@ class TidyTabApp(rumps.App):
                 if not current:
                     break                                   # all done
                 if last_count is not None and len(current) >= last_count:
-                    rumps.notification(APP_NAME, "Stopped",
-                                       "A pinned tab didn't change — stopping to be safe.")
+                    self._notify(APP_NAME, "Stopped",
+                                 "A pinned tab didn't change — stopping to be safe.")
                     break
                 last_count = len(current)
                 el, (x, cy) = current[-1]                   # rightmost remaining pinned tab
@@ -738,13 +746,13 @@ class TidyTabApp(rumps.App):
                     break
                 time.sleep(0.12)
             if not self._stop_flag.is_set():
-                rumps.notification(APP_NAME, "Done",
-                                   f"Processed {done} pinned tab{'' if done == 1 else 's'}.")
+                self._notify(APP_NAME, "Done",
+                             f"Processed {done} pinned tab{'' if done == 1 else 's'}.")
         except pyautogui.FailSafeException:
-            rumps.notification(APP_NAME, "Stopped",
-                               "Fail-safe triggered (mouse moved to a corner).")
+            self._notify(APP_NAME, "Stopped",
+                         "Fail-safe triggered (mouse moved to a corner).")
         except Exception as exc:
-            rumps.notification(APP_NAME, "Error", str(exc))
+            self._notify(APP_NAME, "Error", str(exc))
 
 
 if __name__ == "__main__":

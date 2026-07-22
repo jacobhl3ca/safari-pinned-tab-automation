@@ -20,13 +20,9 @@ APP_NAME = "TidyTab"
 # The script that becomes the app's entry point.
 APP = ["tidytab.py"]
 
-# Menu-bar pin silhouettes bundled into Resources (white + color options;
-# the default look is the classic 📌 emoji set as the app title, no image).
-DATA_FILES = [
-    "menubar_white.png", "menubar_red.png", "menubar_orange.png",
-    "menubar_yellow.png", "menubar_green.png", "menubar_blue.png",
-    "menubar_purple.png", "menubar_pink.png",
-]
+# The menu-bar pin bundled into Resources. One image only — it's a *template*
+# image, so macOS tints it to match a light or dark menu bar automatically.
+DATA_FILES = ["menubar_white.png"]
 
 OPTIONS = {
     # argv_emulation interferes with input synthesis / event handling; leave off.
@@ -37,8 +33,8 @@ OPTIONS = {
         "CFBundleName": APP_NAME,
         "CFBundleDisplayName": APP_NAME,
         "CFBundleIdentifier": "com.jacob.tidytab",
-        "CFBundleVersion": "1.1.5",
-        "CFBundleShortVersionString": "1.1.5",
+        "CFBundleVersion": "1.1.6",
+        "CFBundleShortVersionString": "1.1.6",
         # Menu-bar-only app: no Dock icon, no app-switcher entry.
         "LSUIElement": True,
         # macOS shows this string when prompting for Automation / Apple Events.
@@ -50,6 +46,10 @@ OPTIONS = {
         ),
     },
     # rumps + pyautogui + the Accessibility framework py2app must bundle.
+    # ⚠️ Do NOT add "PyObjCTools" here — it's a NAMESPACE package and py2app's
+    # modulegraph dies on it ("No module named 'PyObjCTools'"), same failure as
+    # `rubicon` below. tidytab.py's `PyObjCTools.AppHelper` import is collected
+    # anyway because rumps itself imports AppHelper.
     "packages": ["rumps", "pyautogui", "ApplicationServices"],
     # Exclude pyautogui's optional MouseInfo GUI helper (TidyTab never calls it).
     # MouseInfo pulls in `rubicon-objc`, which is a NAMESPACE package — py2app's

@@ -19,9 +19,10 @@ first:
 
 - **Unpin pinned tabs (⌘⌥U)** — tabs stay open, just unpinned
 - **Close pinned tabs (⌘⌥K)** — closes them outright
-- **Stop** — breaks the loop at the next cycle
-- Plus **Launch at login**, **Auto-update on launch**, an **Icon color** submenu,
-  **Grant Accessibility…**, and **Check for Updates…**
+- **Stop (Space / Esc)** — breaks the loop at the next cycle
+- Plus **Launch at login**, **Auto-update on launch**, and **Check for Updates…**
+- **Grant Accessibility…** appears in the menu *only while the permission is
+  missing*, and disappears once it's granted
 
 Either command locates the pinned tabs in the **front Safari window** through the
 **Accessibility API** (`find_pinned_tab_centers()`) — no fixed pixel spacing, no
