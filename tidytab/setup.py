@@ -33,8 +33,8 @@ OPTIONS = {
         "CFBundleName": APP_NAME,
         "CFBundleDisplayName": APP_NAME,
         "CFBundleIdentifier": "com.jacob.tidytab",
-        "CFBundleVersion": "1.1.6",
-        "CFBundleShortVersionString": "1.1.6",
+        "CFBundleVersion": "1.2.0",
+        "CFBundleShortVersionString": "1.2.0",
         # Menu-bar-only app: no Dock icon, no app-switcher entry.
         "LSUIElement": True,
         # macOS shows this string when prompting for Automation / Apple Events.

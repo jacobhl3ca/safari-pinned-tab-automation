@@ -1,7 +1,7 @@
 # TidyTab 📌
 
-A tiny **macOS menu-bar app** that bulk **unpins** or **closes** your Safari pinned
-tabs — one command instead of right-clicking through them one at a time.
+A tiny **macOS menu-bar app** that bulk **pins**, **unpins**, or **closes** your
+Safari tabs — one command instead of right-clicking through them one at a time.
 
 **[tidytab.jacobhl.com](https://tidytab.jacobhl.com)** · Developer ID-signed and
 Apple-notarized · free.
@@ -37,14 +37,15 @@ Without it macOS silently drops everything the app does and it will look broken.
 
 ## 🚀 Using it
 
-Two commands, from the menu-bar dropdown or from anywhere via a global hotkey:
+Three commands, from the menu-bar dropdown or from anywhere via a global hotkey:
 
 | Command | Hotkey | What it does |
 | --- | --- | --- |
 | **Unpin pinned tabs** | <kbd>⌘⌥U</kbd> | Tabs stay open, just no longer pinned |
 | **Close pinned tabs** | <kbd>⌘⌥K</kbd> | Closes them outright |
+| **Pin all tabs** | <kbd>⌘⌥P</kbd> | Pins every unpinned tab in the front window |
 
-It finds the pinned tabs in the **front Safari window** by itself, tells you how
+It finds the relevant tabs in the **front Safari window** by itself, tells you how
 many it found, and waits for you to confirm before it touches anything. Mid-run,
 <kbd>Space</kbd>, <kbd>Esc</kbd>, or slamming the mouse into a screen corner stops
 it immediately.
@@ -58,8 +59,8 @@ Also in the menu: **Stop** (with its <kbd>Space</kbd> / <kbd>Esc</kbd> shortcut 
 Safari has no batch-unpin, and unpinning shifts the remaining tabs left — so blind
 "click, unpin, move right 36px" automation lands on the wrong tab. TidyTab locates
 each pinned tab through the macOS **Accessibility API** instead of assuming a fixed
-spacing, then for each one: left-click → right-click for the context menu → arrow
-down to *Unpin* (1×) or *Close* (3×) → Enter.
+spacing, then for each one: left-click → right-click for the context menu → select
+the exact *Pin Tab*, *Unpin Tab*, or *Close Tab* item through Accessibility.
 
 It refuses to click at all if it can't find the tabs, if Safari isn't running, or if
 Safari's window is on another Space — so it can never fire clicks into the wrong app.

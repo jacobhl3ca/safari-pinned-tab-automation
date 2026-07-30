@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-TidyTab — a macOS menu-bar app that bulk unpins or closes Safari pinned tabs.
+TidyTab — a macOS menu-bar app that bulk pins, unpins, or closes Safari tabs.
 
-Pick "Unpin pinned tabs" or "Close pinned tabs" from the menu. TidyTab auto-locates
-the pinned tabs via the macOS Accessibility API, shows a confirmation ("Unpin N
-pinned tabs?"), and on OK acts on each one — no need to position the mouse. If it
-can't read the tabs it offers a manual fallback.
+Pick "Unpin pinned tabs", "Close pinned tabs", or "Pin all tabs" from the menu.
+TidyTab auto-locates the relevant tabs via the macOS Accessibility API, shows a
+confirmation, and on OK acts on each one — no need to position the mouse.
 
 ⚠️  Requires Accessibility permission (System Settings → Privacy & Security →
     Accessibility). Without it macOS blocks the app from reading/controlling Safari.
@@ -45,7 +44,7 @@ from ApplicationServices import (
 
 # --- App identity (rename the app by changing this ONE constant) ---------------
 APP_NAME = "TidyTab"
-VERSION = "1.1.6"
+VERSION = "1.2.0"
 
 PREFS_PATH = os.path.expanduser("~/Library/Application Support/TidyTab/prefs.json")
 REPO = "jacobhl3ca/safari-pinned-tab-automation"
@@ -66,11 +65,12 @@ ICON_DIM = (20, 20)         # menu-bar icon FOOTPRINT in points = rumps' own def
                             # by transparent padding baked into menubar_white.png (~70% ink, ~30% margin),
                             # so the pin's ink lands ~14pt — flush with neighbor SF-Symbol glyphs.
 
-# Menu labels for the two actions + Stop, with their shortcuts shown inline so the
+# Menu labels for the three actions + Stop, with their shortcuts shown inline so the
 # hotkeys are discoverable from the menu itself (rumps can't set real key equivalents
 # on a status-bar menu, so the shortcut lives in the title text).
 UNPIN_TITLE = "Unpin pinned tabs  (⌘⌥U)"
 CLOSE_TITLE = "Close pinned tabs  (⌘⌥K)"
+PIN_TITLE = "Pin all tabs  (⌘⌥P)"
 STOP_TITLE = "Stop  (Space / Esc)"
 GRANT_TITLE = "Grant Accessibility…"
 
@@ -253,9 +253,13 @@ def _collect_radio_buttons(element, out, depth=0, max_depth=14):
         pass
 
 
-def find_pinned_tabs():
-    """Return [(ax_element, (cx, cy)), ...] for Safari's pinned tabs, left→right; []
-    if none/unreadable. The element lets us try a click-free close via AXPress."""
+def _find_tabs():
+    """Return Safari tab records left→right as (element, center, width, pinned).
+
+    Current Safari exposes AXSubrole=AXTabButton and an AXIdentifier containing
+    isPinned=true/false. Width is retained for older Safari versions that don't
+    expose the pinned state.
+    """
     pid = _safari_pid()
     if not pid:
         return []
@@ -272,25 +276,62 @@ def find_pinned_tabs():
 
     items = []
     for el in radios:
+        subrole = _ax_attr(el, "AXSubrole")
+        if subrole and subrole != "AXTabButton":
+            continue
         pos = _ax_point(_ax_attr(el, "AXPosition"))
         sz = _ax_size(_ax_attr(el, "AXSize"))
         if pos and sz and sz[0] > 0:
-            items.append((el, pos[0], pos[1], sz[0], sz[1]))
-    if not items:
-        return []
+            identifier = _ax_attr(el, "AXIdentifier") or ""
+            pinned = None
+            match = re.search(r"(?:^|[?&])isPinned=(true|false)(?:&|$)", identifier)
+            if match:
+                pinned = match.group(1) == "true"
+            items.append((el, (pos[0] + sz[0] / 2.0, pos[1] + sz[1] / 2.0),
+                          sz[0], pinned))
 
-    items.sort(key=lambda t: t[1])  # by x
-    out = []
-    for el, x, y, w, h in items:
-        if w <= PINNED_MAX_WIDTH:
-            out.append((el, (x + w / 2.0, y + h / 2.0)))
+    items.sort(key=lambda t: t[1][0])
+    return items
+
+
+def _split_tabs(items):
+    """Return (pinned, unpinned) lists, preferring Safari's explicit AX state."""
+    if any(item[3] is not None for item in items):
+        pinned = [(el, center) for el, center, _width, state in items if state is True]
+        unpinned = [(el, center) for el, center, _width, state in items if state is False]
+        return pinned, unpinned
+
+    # Compatibility fallback for older Safari: pinned tabs are the narrow prefix.
+    pinned = []
+    unpinned = []
+    seen_unpinned = False
+    for el, center, width, _state in items:
+        if not seen_unpinned and width <= PINNED_MAX_WIDTH:
+            pinned.append((el, center))
         else:
-            break  # first wide (titled) tab ends the pinned run
-    return out
+            seen_unpinned = True
+            unpinned.append((el, center))
+    return pinned, unpinned
+
+
+def find_pinned_tabs():
+    """Return [(ax_element, (cx, cy)), ...] for pinned tabs, left→right."""
+    pinned, _unpinned = _split_tabs(_find_tabs())
+    return pinned
+
+
+def find_unpinned_tabs():
+    """Return [(ax_element, (cx, cy)), ...] for unpinned tabs, left→right."""
+    _pinned, unpinned = _split_tabs(_find_tabs())
+    return unpinned
 
 
 def find_pinned_tab_centers():
     return [c for _, c in find_pinned_tabs()]
+
+
+def find_unpinned_tab_centers():
+    return [c for _, c in find_unpinned_tabs()]
 
 
 def close_tab_via_ax(element):
@@ -306,6 +347,47 @@ def close_tab_via_ax(element):
             if "close" in label:
                 return AXUIElementPerformAction(child, "AXPress") == 0
         return False
+    except Exception:
+        return False
+
+
+def press_tab_context_menu_item(title):
+    """Press a named item in the currently open Safari tab context menu."""
+    try:
+        from ApplicationServices import AXUIElementPerformAction
+
+        pid = _safari_pid()
+        if not pid:
+            return False
+        app = AXUIElementCreateApplication(pid)
+        window = _ax_attr(app, "AXMainWindow")
+        if window is None:
+            return False
+
+        def find_menu_item(element, depth=0):
+            if depth > 4:
+                return None
+            role = _ax_attr(element, "AXRole")
+            children = _ax_attr(element, "AXChildren") or []
+            if role == "AXMenu":
+                menu_items = [
+                    child for child in children
+                    if _ax_attr(child, "AXRole") == "AXMenuItem"
+                ]
+                menu_titles = {_ax_attr(child, "AXTitle") for child in menu_items}
+                # Distinguish the tab context menu from Safari's main Window menu.
+                if {"Duplicate Tab", "Close Tab"} <= menu_titles:
+                    for child in menu_items:
+                        if _ax_attr(child, "AXTitle") == title:
+                            return child
+            for child in children:
+                found = find_menu_item(child, depth + 1)
+                if found is not None:
+                    return found
+            return None
+
+        item = find_menu_item(window)
+        return item is not None and AXUIElementPerformAction(item, "AXPress") == 0
     except Exception:
         return False
 
@@ -338,11 +420,12 @@ class TidyTabApp(rumps.App):
         self._autoupdate_item = rumps.MenuItem("Auto-update on launch", callback=self._toggle_autoupdate)
         self._autoupdate_item.state = load_prefs().get("auto_update", True)
 
-        # Two explicit actions (no hidden mode) — clear what each does. Every
+        # Three explicit actions (no hidden mode) — clear what each does. Every
         # action carries its shortcut in the label.
         self.menu = [
             rumps.MenuItem(UNPIN_TITLE, callback=self._run_unpin),
             rumps.MenuItem(CLOSE_TITLE, callback=self._run_close),
+            rumps.MenuItem(PIN_TITLE, callback=self._run_pin),
             rumps.MenuItem(STOP_TITLE, callback=self._stop),
             None,
             self._login_item,
@@ -494,7 +577,7 @@ class TidyTabApp(rumps.App):
             self._notify(APP_NAME, "Update failed", str(exc))
 
     def _start_hotkey_monitor(self):
-        # Always-on global hotkeys: ⌘⌥U = Unpin, ⌘⌥K = Close (no need to open the menu).
+        # Always-on global hotkeys: ⌘⌥U = Unpin, ⌘⌥K = Close, ⌘⌥P = Pin all.
         if self._hotkey_monitor is not None:
             return
 
@@ -507,6 +590,8 @@ class TidyTabApp(rumps.App):
                         self._run_unpin(None)
                     elif ch == "k":
                         self._run_close(None)
+                    elif ch == "p":
+                        self._run_pin(None)
             except Exception:
                 pass
 
@@ -550,9 +635,9 @@ class TidyTabApp(rumps.App):
         resp = self._alert(
             title=f"Welcome to {APP_NAME} 📌",
             message=(
-                "TidyTab clears your Safari pinned tabs in one sweep.\n\n"
-                "• Click the menu-bar pin → “Unpin pinned tabs” or “Close pinned tabs”\n"
-                "• Or use the hotkeys ⌘⌥U (unpin) / ⌘⌥K (close)\n"
+                "TidyTab manages all the tabs in your front Safari window in one sweep.\n\n"
+                "• Choose “Unpin pinned tabs,” “Close pinned tabs,” or “Pin all tabs”\n"
+                "• Or use ⌘⌥U (unpin) / ⌘⌥K (close) / ⌘⌥P (pin all)\n"
                 "• It confirms the count first; press Space, Esc, or a screen corner to stop\n\n"
                 "One-time setup: TidyTab needs Accessibility permission to control Safari. "
                 "Click “Open Settings,” switch on TidyTab under Accessibility, and you're ready."
@@ -574,6 +659,10 @@ class TidyTabApp(rumps.App):
 
     def _run_close(self, _sender):
         self._operation = "close"
+        self._start()
+
+    def _run_pin(self, _sender):
+        self._operation = "pin"
         self._start()
 
     def _start(self):
@@ -614,17 +703,19 @@ class TidyTabApp(rumps.App):
             )
             return
 
-        op_label = "Close" if self._operation == "close" else "Unpin"
+        op_label = {"close": "Close", "pin": "Pin"}.get(self._operation, "Unpin")
+        target_label = "unpinned" if self._operation == "pin" else "pinned"
         try:
-            centers = find_pinned_tab_centers()
+            centers = (find_unpinned_tab_centers() if self._operation == "pin"
+                       else find_pinned_tab_centers())
         except Exception:
             centers = []
 
         if not centers:
             self._alert(
-                f"{APP_NAME}: no pinned tabs found",
-                "Couldn't find pinned tabs in the front Safari window. Make sure Safari "
-                "is open with pinned tabs (and TidyTab has Accessibility permission), "
+                f"{APP_NAME}: no {target_label} tabs found",
+                f"Couldn't find {target_label} tabs in the front Safari window. Make sure Safari "
+                f"is open with {target_label} tabs (and TidyTab has Accessibility permission), "
                 "then try again. (TidyTab won't click unless it has located the tabs.)",
             )
             return
@@ -632,8 +723,8 @@ class TidyTabApp(rumps.App):
         n = len(centers)
         tabs_word = "tab" if n == 1 else "tabs"
         ok = self._alert(
-            title=f"{op_label} {n} pinned {tabs_word}?",
-            message=(f"TidyTab will {op_label.lower()} {n} pinned {tabs_word} in "
+            title=f"{op_label} {n} {target_label} {tabs_word}?",
+            message=(f"TidyTab will {op_label.lower()} {n} {target_label} {tabs_word} in "
                      "Safari.\n\nPress Space or Esc to stop mid-run."),
             ok=op_label, cancel="Cancel",
         )
@@ -699,8 +790,22 @@ class TidyTabApp(rumps.App):
         pyautogui.click()
         time.sleep(0.1)
         pyautogui.click(button="right")
-        time.sleep(0.12)
-        downs = 3 if operation == "close" else 1
+        if operation == "pin":
+            menu_deadline = time.monotonic() + 0.8
+            while time.monotonic() < menu_deadline:
+                if press_tab_context_menu_item("Pin Tab"):
+                    time.sleep(0.15)
+                    return
+                time.sleep(0.05)
+
+            # Fallback when Safari doesn't expose the open menu through AX: Home
+            # normalizes selection regardless of which item appeared under the mouse.
+            pyautogui.press("home")
+            downs = 0
+        else:
+            # Preserve the proven v1.1.6 Unpin/Close keyboard behavior.
+            time.sleep(0.12)
+            downs = 3 if operation == "close" else 1
         for _ in range(downs):
             pyautogui.press("down")
             time.sleep(0.04)
@@ -711,27 +816,29 @@ class TidyTabApp(rumps.App):
     def _automation_loop(self):
         _, centers = self._mode
         operation = self._operation
+        target_label = "unpinned" if operation == "pin" else "pinned"
         try:
             # The confirm dialog stole focus — bring Safari back before clicking.
             activate_safari()
             time.sleep(0.5)
             done = 0
             expected = len(centers)
-            last_count = None
             row_y = None
+            completed = False
             # Self-correcting: re-detect after every action, act on the rightmost
-            # remaining pinned tab, stop when none are left, and bail if the count
-            # ISN'T dropping — so a missed click can never become runaway clicking.
+            # remaining target tab, stop when none are left, and bail if the count
+            # isn't dropping — so a missed click can never become runaway clicking.
             while not self._stop_flag.is_set():
-                current = find_pinned_tabs()
+                current = (find_unpinned_tabs() if operation == "pin"
+                           else find_pinned_tabs())
                 if not current:
-                    break                                   # all done
-                if last_count is not None and len(current) >= last_count:
-                    self._notify(APP_NAME, "Stopped",
-                                 "A pinned tab didn't change — stopping to be safe.")
+                    completed = True
                     break
-                last_count = len(current)
-                el, (x, cy) = current[-1]                   # rightmost remaining pinned tab
+                previous_count = len(current)
+                previous_pinned_count = (
+                    len(find_pinned_tabs()) if operation == "pin" else None
+                )
+                el, (x, cy) = current[-1]                   # rightmost remaining target tab
                 if row_y is None:
                     row_y = cy                              # lock the row's y → no vertical jitter
                 # Click-free close when the tab exposes a close button via the AX API;
@@ -744,10 +851,38 @@ class TidyTabApp(rumps.App):
                 done += 1
                 if done > expected + 3:                     # hard cap; never loop forever
                     break
-                time.sleep(0.12)
-            if not self._stop_flag.is_set():
+
+                # Pinning has a visible Safari animation and its AX state can lag
+                # behind the menu action. Poll briefly rather than declaring a
+                # successful action stuck on the very next read.
+                action_succeeded = False
+                deadline = time.monotonic() + 2.0
+                while time.monotonic() < deadline and not self._stop_flag.is_set():
+                    if operation == "pin":
+                        action_succeeded = len(find_pinned_tabs()) > previous_pinned_count
+                    else:
+                        action_succeeded = len(find_pinned_tabs()) < previous_count
+                    if action_succeeded:
+                        break
+                    time.sleep(0.1)
+                if self._stop_flag.is_set():
+                    break
+                if not action_succeeded:
+                    self._notify(
+                        APP_NAME, "Stopped",
+                        f"A {target_label} tab didn't change — stopping to be safe.",
+                    )
+                    break
+                # Safari creates a fresh ordinary tab when its last one is pinned.
+                # "Pin all" means the tabs present at confirmation time, not that
+                # browser-generated replacement, so stop after the original count.
+                if operation == "pin" and done >= expected:
+                    completed = True
+                    break
+            if completed and not self._stop_flag.is_set():
+                verb = {"close": "Closed", "pin": "Pinned"}.get(operation, "Unpinned")
                 self._notify(APP_NAME, "Done",
-                             f"Processed {done} pinned tab{'' if done == 1 else 's'}.")
+                             f"{verb} {done} tab{'' if done == 1 else 's'}.")
         except pyautogui.FailSafeException:
             self._notify(APP_NAME, "Stopped",
                          "Fail-safe triggered (mouse moved to a corner).")

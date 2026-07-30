@@ -1,7 +1,7 @@
 # TidyTab 📌
 
-A tiny **macOS menu-bar app** that tidies up your **Safari pinned tabs** —
-unpinning or closing a whole row of them with one click, no terminal needed.
+A tiny **macOS menu-bar app** that tidies up your **Safari tabs** — pinning,
+unpinning, or closing a whole row of them with one click, no terminal needed.
 
 This is the source. To just **use** TidyTab, grab the signed build from the
 [latest release](https://github.com/jacobhl3ca/safari-pinned-tab-automation/releases/latest/download/TidyTab.dmg)
@@ -14,24 +14,25 @@ or `brew install --cask jacobhl3ca/tap/tidytab` — see the [repo README](../REA
 
 ## What it does
 
-Two commands, straight from the menu bar or a global hotkey — no options to set
+Three commands, straight from the menu bar or a global hotkey — no options to set
 first:
 
 - **Unpin pinned tabs (⌘⌥U)** — tabs stay open, just unpinned
 - **Close pinned tabs (⌘⌥K)** — closes them outright
+- **Pin all tabs (⌘⌥P)** — pins every unpinned tab in the front window
 - **Stop (Space / Esc)** — breaks the loop at the next cycle
 - Plus **Launch at login**, **Auto-update on launch**, and **Check for Updates…**
 - **Grant Accessibility…** appears in the menu *only while the permission is
   missing*, and disappears once it's granted
 
-Either command locates the pinned tabs in the **front Safari window** through the
-**Accessibility API** (`find_pinned_tab_centers()`) — no fixed pixel spacing, no
+Each command locates its target tabs in the **front Safari window** through the
+**Accessibility API** — no fixed pixel spacing, no
 parking the mouse anywhere — reports how many it found, and waits for your OK.
-Then per tab: left-click → right-click for the context menu → press **Down**
-(1× to reach *Unpin*, 3× to reach *Close*) → press **Enter**.
+Then per tab: left-click → right-click for the context menu → select the exact
+*Pin Tab*, *Unpin Tab*, or *Close Tab* menu item through Accessibility.
 
 It bails out rather than clicking blind if Safari isn't running, if it can't find
-any pinned tabs, or if Safari's window is on another Space.
+the relevant tabs, or if Safari's window is on another Space.
 
 **Stopping:** <kbd>Space</kbd> or <kbd>Esc</kbd> mid-run, or slam the mouse into
 any screen corner (pyautogui's `FAILSAFE`). Errors surface as a notification — the
@@ -59,8 +60,8 @@ source .venv/bin/activate
 python tidytab.py
 ```
 
-A 📌 appears in the menu bar. Pick **Unpin** or **Close** from it (the ⌘⌥U / ⌘⌥K
-hotkeys work too).
+A 📌 appears in the menu bar. Pick **Unpin**, **Close**, or **Pin all** from it
+(the ⌘⌥U / ⌘⌥K / ⌘⌥P hotkeys work too).
 
 > In dev mode, the **terminal/Python** running the script is what needs
 > Accessibility permission (see below). When you build the `.app`, the app
