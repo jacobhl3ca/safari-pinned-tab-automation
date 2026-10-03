@@ -15,14 +15,17 @@ progress it shows "Space to stop" — Space (or a screen-corner slam) aborts.
 
 import os
 import re
+import sys
 import json
 import time
 import threading
 import subprocess
 import urllib.request
 
+import objc
 import rumps
 import pyautogui
+from rumps.rumps import NSApp as _RumpsDelegate
 
 from AppKit import NSApplication, NSEvent, NSWorkspace
 from PyObjCTools.AppHelper import callAfter
@@ -44,7 +47,11 @@ from ApplicationServices import (
 
 # --- App identity (rename the app by changing this ONE constant) ---------------
 APP_NAME = "TidyTab"
-VERSION = "1.2.0"
+VERSION = "1.2.4"
+# Developer ID team. The self-updater pins downloaded builds to this, so only a
+# .app we signed can replace the running one. Must match the certificate used in
+# DISTRIBUTION.md step 2 ("Developer ID Application: … (V45QZXMDAW)").
+TEAM_ID = "V45QZXMDAW"
 
 PREFS_PATH = os.path.expanduser("~/Library/Application Support/TidyTab/prefs.json")
 REPO = "jacobhl3ca/safari-pinned-tab-automation"
@@ -73,6 +80,12 @@ CLOSE_TITLE = "Close pinned tabs  (⌘⌥K)"
 PIN_TITLE = "Pin all tabs  (⌘⌥P)"
 STOP_TITLE = "Stop  (Space / Esc)"
 GRANT_TITLE = "Grant Accessibility…"
+HIDE_ICON_TITLE = "Hide menu-bar icon…"
+
+# Launch-at-login passes this flag, so a login launch can keep a hidden icon hidden
+# while a launch the user makes by hand brings it back (see _apply_icon_visibility).
+LOGIN_ARG = "--login"
+RELAUNCH_WINDOW = 120       # seconds: a self-update relaunch inside this window also stays hidden
 
 
 # ============================================================================ #
@@ -168,7 +181,8 @@ def set_login_item(enabled):
             '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
             '<plist version="1.0"><dict>'
             '<key>Label</key><string>com.jacob.tidytab</string>'
-            f'<key>ProgramArguments</key><array><string>{exe}</string></array>'
+            f'<key>ProgramArguments</key><array><string>{exe}</string>'
+            f'<string>{LOGIN_ARG}</string></array>'
             '<key>RunAtLoad</key><true/></dict></plist>\n'
         )
         with open(LAUNCH_AGENT, "w") as f:
@@ -178,6 +192,26 @@ def set_login_item(enabled):
             os.remove(LAUNCH_AGENT)
         except OSError:
             pass
+
+
+def _upgrade_login_item():
+    """Agents written before v1.2.4 launch without LOGIN_ARG. Rewrite them once,
+    so a login launch can be told apart from a launch by hand."""
+    try:
+        if login_item_enabled() and _app_executable():
+            with open(LAUNCH_AGENT) as f:
+                if LOGIN_ARG not in f.read():
+                    set_login_item(True)
+    except Exception:
+        pass
+
+
+def _launched_unattended(prefs):
+    """True for a launch the user did not make by hand: launch-at-login, or the
+    self-updater's relaunch (it stamps `relaunched_at` just before it relaunches)."""
+    if LOGIN_ARG in sys.argv[1:]:
+        return True
+    return time.time() - prefs.get("relaunched_at", 0) < RELAUNCH_WINDOW
 
 
 # --- Preferences (persist the chosen menu-bar colour across launches) -----------
@@ -210,6 +244,72 @@ def latest_release_version():
         return (data.get("tag_name") or "").lstrip("v")
     except Exception:
         return None
+
+
+def _installed_app_path():
+    """The running bundle when it lives anywhere under /Applications (a subfolder
+    such as "/Applications/2. Browsers" too), else /Applications/TidyTab.app.
+
+    🐛 to v1.2.3 this was always /Applications/TidyTab.app, so a copy kept in a
+    subfolder updated into a SECOND copy and stayed old itself. Spotlight then
+    opened the old copy, which never got the reopen that shows a hidden icon."""
+    res = os.environ.get("RESOURCEPATH")
+    if res:
+        bundle = os.path.dirname(os.path.dirname(res))   # …/X.app/Contents/Resources → …/X.app
+        if bundle.startswith("/Applications/") and bundle.endswith(".app"):
+            return bundle
+    return "/Applications/TidyTab.app"
+
+
+APP_PATH_INSTALLED = _installed_app_path()
+# Siblings of the installed copy: same volume, so the swap's renames stay atomic.
+_SWAP_STAGING = os.path.join(os.path.dirname(APP_PATH_INSTALLED), ".TidyTab.new")
+_SWAP_BACKUP = os.path.join(os.path.dirname(APP_PATH_INSTALLED), ".TidyTab.old")
+
+
+def _swap_in_place(src):
+    """Replace the installed app with the verified copy at `src`.
+
+    🐛 v1.2.2 destroyed before it swapped:
+        shutil.rmtree(installed, ignore_errors=True)
+        os.rename(staging, installed)
+    Anything that threw between those two lines — a rename across devices, a
+    permissions error, the process dying — left the machine with *no* app, and
+    the only handler posted a notification. So: copy first, move the live copy
+    aside, swap, and only then delete the old one. Any failure puts the old copy
+    back. A failed update must leave a working app, never an empty slot.
+    """
+    import shutil
+    shutil.rmtree(_SWAP_STAGING, ignore_errors=True)
+    shutil.rmtree(_SWAP_BACKUP, ignore_errors=True)
+    shutil.copytree(src, _SWAP_STAGING, symlinks=True)
+
+    moved_aside = False
+    if os.path.exists(APP_PATH_INSTALLED):
+        os.rename(APP_PATH_INSTALLED, _SWAP_BACKUP)   # same volume → atomic
+        moved_aside = True
+    try:
+        os.rename(_SWAP_STAGING, APP_PATH_INSTALLED)
+    except Exception:
+        if moved_aside and not os.path.exists(APP_PATH_INSTALLED):
+            os.rename(_SWAP_BACKUP, APP_PATH_INSTALLED)   # roll back
+        raise
+    shutil.rmtree(_SWAP_BACKUP, ignore_errors=True)
+    shutil.rmtree(_SWAP_STAGING, ignore_errors=True)
+
+
+def _restore_orphaned_app():
+    """If a previous swap died mid-flight, the app is sitting in one of the
+    scratch paths and /Applications is empty. Put it back at launch."""
+    try:
+        if os.path.exists(APP_PATH_INSTALLED):
+            return
+        for candidate in (_SWAP_BACKUP, _SWAP_STAGING):
+            if os.path.isdir(candidate):
+                os.rename(candidate, APP_PATH_INSTALLED)
+                return
+    except Exception:
+        pass
 
 
 # ============================================================================ #
@@ -400,6 +500,20 @@ def _res(name):
     return os.path.join(base, name)
 
 
+class NSApp(objc.Category(_RumpsDelegate)):
+    """Opening TidyTab again while it runs (Finder, Spotlight, Launchpad) makes
+    macOS send it a "reopen" event. With the menu-bar icon hidden that is the way
+    back, the same as other menu-bar apps (Rectangle, Maccy). rumps' delegate has
+    no handler for it, so this category adds one."""
+
+    @objc.typedSelector(b"Z@:@Z")
+    def applicationShouldHandleReopen_hasVisibleWindows_(self, _sender, _has_windows):
+        app = getattr(rumps.App, "*app_instance", None)
+        if app is not None:
+            app._on_reopen()
+        return True
+
+
 class TidyTabApp(rumps.App):
     def __init__(self):
         super().__init__(APP_NAME, quit_button=None)
@@ -410,6 +524,7 @@ class TidyTabApp(rumps.App):
         self._worker = None
         self._space_monitor = None
         self._watchdog = None
+        self._relaunching = False   # the self-updater's own `open` is not a reopen by the user
 
         # Idle menu-bar look (restored after a run): the white template pin.
         self._idle_icon = _res("menubar_white.png")
@@ -419,6 +534,7 @@ class TidyTabApp(rumps.App):
         self._login_item.state = login_item_enabled()
         self._autoupdate_item = rumps.MenuItem("Auto-update on launch", callback=self._toggle_autoupdate)
         self._autoupdate_item.state = load_prefs().get("auto_update", True)
+        self._hide_icon_item = rumps.MenuItem(HIDE_ICON_TITLE, callback=self._hide_icon)
 
         # Three explicit actions (no hidden mode) — clear what each does. Every
         # action carries its shortcut in the label.
@@ -430,8 +546,16 @@ class TidyTabApp(rumps.App):
             None,
             self._login_item,
             self._autoupdate_item,
+            self._hide_icon_item,
             None,
             rumps.MenuItem(f"Check for Updates…  (v{VERSION})", callback=self._check_updates),
+            # Always-present escape hatch. A self-update can fail for reasons the
+            # app cannot fix from inside (truncated download, a dmg that won't
+            # mount, a signature that doesn't match) — and until v1.2.1 it failed
+            # on every single run. Without this the only signal was a notification
+            # saying "skipped", with nowhere to go; RELEASES_PAGE was defined and
+            # never used. A user should never have to know the repo URL to recover.
+            rumps.MenuItem("Download page…", callback=self._open_releases_page),
             rumps.MenuItem("Quit", callback=self._quit),
         ]
 
@@ -442,11 +566,16 @@ class TidyTabApp(rumps.App):
         self._grant_timer.start()
 
         self._apply_idle()
+        _upgrade_login_item()
+        # before_start fires after rumps creates the status item and before the
+        # event loop draws it, so a hidden icon never flashes on screen.
+        rumps.events.before_start.register(self._apply_icon_visibility)
 
         self._launch_check = rumps.Timer(self._launch_accessibility_check, 1.0)
         self._launch_check.start()
         self._hotkey_monitor = None
         self._start_hotkey_monitor()
+        _restore_orphaned_app()        # a swap that died mid-flight left the app aside
         self._auto_update_on_launch()  # self-update on launch if a newer release exists
         self._update_timer = rumps.Timer(lambda _t: self._auto_update_on_launch(), 14400)
         self._update_timer.start()     # …and re-check every ~4h for long-running sessions
@@ -458,6 +587,43 @@ class TidyTabApp(rumps.App):
     def _toggle_autoupdate(self, sender):
         sender.state = not sender.state
         prefs = load_prefs(); prefs["auto_update"] = bool(sender.state); save_prefs(prefs)
+
+    # ---- hide / show the menu-bar icon -------------------------------------- #
+    def _set_icon_visible(self, visible):
+        item = getattr(getattr(self, "_nsapp", None), "nsstatusitem", None)
+        if item is not None:
+            item.setVisible_(bool(visible))
+
+    def _set_icon_hidden(self, hidden):
+        prefs = load_prefs(); prefs["hide_icon"] = bool(hidden); save_prefs(prefs)
+        self._set_icon_visible(not hidden)
+
+    def _apply_icon_visibility(self):
+        """Launch: a hidden icon stays hidden only for a login launch or an update
+        relaunch. A launch by hand shows it again, so "open TidyTab" always brings
+        the icon back, running or not."""
+        prefs = load_prefs()
+        hidden = bool(prefs.get("hide_icon")) and _launched_unattended(prefs)
+        prefs.pop("relaunched_at", None)
+        prefs["hide_icon"] = hidden
+        save_prefs(prefs)
+        self._set_icon_visible(not hidden)
+
+    def _hide_icon(self, _sender):
+        if self._alert(
+            title="Hide the menu-bar icon?",
+            message=(
+                "TidyTab keeps running and ⌘⌥U / ⌘⌥K / ⌘⌥P still work. "
+                "The icon shows during a run, so the stop hint stays visible.\n\n"
+                "To show the icon again, open TidyTab again (Applications or Spotlight)."
+            ),
+            ok="Hide Icon", cancel="Cancel",
+        ) == 1:
+            self._set_icon_hidden(True)
+
+    def _on_reopen(self):
+        if not self._relaunching:
+            self._set_icon_hidden(False)
 
     def _sync_accessibility_item(self, _timer=None):
         """Show "Grant Accessibility…" ONLY while the permission is missing.
@@ -502,6 +668,25 @@ class TidyTabApp(rumps.App):
         made update banners appear late / stutter."""
         callAfter(rumps.notification, title, subtitle, message)
 
+    def _open_releases_page(self, _sender=None):
+        """Open the GitHub releases page. Safe from any thread — `open` hands off
+        to LaunchServices rather than touching Cocoa UI here."""
+        try:
+            subprocess.Popen(["open", RELEASES_PAGE])
+        except Exception:
+            pass
+
+    def _offer_download_page(self, reason):
+        """MAIN thread only: say why the update didn't apply and offer the page.
+
+        Only shown when the user asked for the update — at launch a modal would
+        ambush them, so the auto path notifies and leaves the "Download page…"
+        menu item as the way through.
+        """
+        if self._alert(APP_NAME, f"{reason}\n\nOpen the download page to install it manually?",
+                       ok="Open page", cancel="Later") == 1:
+            self._open_releases_page()
+
     def _check_updates(self, _sender=None):
         """Manual (menu) check.
 
@@ -521,7 +706,10 @@ class TidyTabApp(rumps.App):
         elif _ver_tuple(latest) > _ver_tuple(VERSION):
             if self._alert(APP_NAME, f"Update available: v{latest}.\nDownload and install now?",
                            ok="Update", cancel="Later") == 1:
-                threading.Thread(target=self._do_self_update, args=(latest,), daemon=True).start()
+                # manual=True: they asked, so a failure earns a dialog with a way
+                # out rather than a notification that dead-ends.
+                threading.Thread(target=self._do_self_update, args=(latest,),
+                                 kwargs={"manual": True}, daemon=True).start()
         else:
             self._alert(APP_NAME, f"You're on the latest version (v{VERSION}).")
 
@@ -535,14 +723,19 @@ class TidyTabApp(rumps.App):
                 return
             if load_prefs().get("update_attempted") == latest:   # tried + still behind → don't loop
                 self._notify(APP_NAME, f"Update v{latest} available",
-                             "Auto-update didn't apply — use “Check for Updates…”.")
+                             "Auto-update didn't apply — use “Download page…” to install it.")
                 return
             self._do_self_update(latest)
         threading.Thread(target=work, daemon=True).start()
 
-    def _do_self_update(self, latest):
+    def _do_self_update(self, latest, manual=False):
         """Download the latest notarized dmg, verify its signature, swap it into
-        /Applications, and relaunch. Guarded against update loops + bad downloads."""
+        /Applications, and relaunch. Guarded against update loops + bad downloads.
+
+        `manual` = the user picked "Update" in the dialog, so a failure gets a
+        dialog offering the download page. The launch path leaves it False: a
+        modal at startup is an ambush, so it only notifies.
+        """
         try:
             import shutil
             self._notify(APP_NAME, f"Updating to v{latest}…",
@@ -556,25 +749,53 @@ class TidyTabApp(rumps.App):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # clear any stale mount
             subprocess.run(["hdiutil", "attach", dmg, "-nobrowse", "-mountpoint", mnt],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            src = os.path.join(mnt, "TidyTab.app")
-            ok = os.path.exists(src) and subprocess.run(
-                ["codesign", "--verify", "--quiet", src]).returncode == 0
+            ok = False
+            try:
+                src = os.path.join(mnt, "TidyTab.app")
+                # 🐛 v1.2.1: this was `codesign --verify --quiet`. codesign has no
+                # --quiet flag, so it exited 2 (usage error) on EVERY run — `ok` was
+                # always False, so no auto-update ever applied. Worse, the loop guard
+                # above records `update_attempted` before the download, so the next
+                # launch short-circuits to "use Check for Updates…" instead of
+                # retrying. Anyone on auto-update has been silently stuck.
+                #
+                # The replacement also fixes what the original *would* have done if
+                # it worked: a bare `--verify` only asks "is this signature intact",
+                # which any signature satisfies — including one an attacker applied
+                # to a swapped dmg. Pinning the requirement to Apple's anchor plus
+                # our Developer ID team means only a build we signed can replace the
+                # running app.
+                ok = os.path.exists(src) and subprocess.run(
+                    ["codesign", "--verify", "-R",
+                     f"=anchor apple generic and certificate leaf[subject.OU] = {TEAM_ID}",
+                     src],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+                if ok:
+                    _swap_in_place(src)
+            finally:
+                # 🐛 v1.2.2: the detach lived *after* the swap inside the outer try,
+                # so anything that threw mid-swap skipped it and left the dmg
+                # mounted. A finally detaches on every path.
+                subprocess.run(["hdiutil", "detach", mnt],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if ok:
-                staging = "/Applications/.TidyTab.new"
-                shutil.rmtree(staging, ignore_errors=True)
-                shutil.copytree(src, staging)
-                shutil.rmtree("/Applications/TidyTab.app", ignore_errors=True)
-                os.rename(staging, "/Applications/TidyTab.app")
-            subprocess.run(["hdiutil", "detach", mnt],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if ok:
-                subprocess.Popen(["open", "/Applications/TidyTab.app"])
+                # Keep a hidden icon hidden across the relaunch (_launched_unattended).
+                self._relaunching = True
+                prefs = load_prefs(); prefs["relaunched_at"] = time.time(); save_prefs(prefs)
+                subprocess.Popen(["open", APP_PATH_INSTALLED])
                 callAfter(rumps.quit_application)
             else:
                 self._notify(APP_NAME, "Update skipped",
-                             "The downloaded update failed verification — try again later.")
+                             "The download failed verification — install it from the Download page.")
+                if manual:
+                    callAfter(self._offer_download_page,
+                              f"The v{latest} download didn't pass signature verification, "
+                              "so TidyTab left the installed copy alone.")
         except Exception as exc:
             self._notify(APP_NAME, "Update failed", str(exc))
+            if manual:
+                callAfter(self._offer_download_page,
+                          f"The v{latest} update couldn't be applied: {exc}")
 
     def _start_hotkey_monitor(self):
         # Always-on global hotkeys: ⌘⌥U = Unpin, ⌘⌥K = Close, ⌘⌥P = Pin all.
@@ -747,6 +968,7 @@ class TidyTabApp(rumps.App):
 
     # ---- running-state UI -------------------------------------------------- #
     def _begin_running_ui(self):
+        self._set_icon_visible(True)    # a hidden icon shows for the run: the stop hint lives here
         self.title = "  Space/Esc to stop"
         self._start_space_monitor()
         if self._watchdog is None:
@@ -755,6 +977,7 @@ class TidyTabApp(rumps.App):
 
     def _end_running_ui(self):
         self._apply_idle()
+        self._set_icon_visible(not load_prefs().get("hide_icon"))
         self._stop_space_monitor()
         if self._watchdog is not None:
             self._watchdog.stop()

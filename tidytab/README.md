@@ -21,7 +21,11 @@ first:
 - **Close pinned tabs (⌘⌥K)** — closes them outright
 - **Pin all tabs (⌘⌥P)** — pins every unpinned tab in the front window
 - **Stop (Space / Esc)** — breaks the loop at the next cycle
-- Plus **Launch at login**, **Auto-update on launch**, and **Check for Updates…**
+- Plus **Launch at login**, **Auto-update on launch**, **Check for Updates…**, and
+  **Download page…**
+- **Hide menu-bar icon…** — hides the pin; TidyTab keeps running and the hotkeys
+  keep working (the pin shows during a run, for the stop hint). Open TidyTab again
+  to bring it back. With Launch at login on, it stays hidden after a restart
 - **Grant Accessibility…** appears in the menu *only while the permission is
   missing*, and disappears once it's granted
 

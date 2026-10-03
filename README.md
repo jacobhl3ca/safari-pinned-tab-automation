@@ -51,8 +51,14 @@ many it found, and waits for you to confirm before it touches anything. Mid-run,
 it immediately.
 
 Also in the menu: **Stop** (with its <kbd>Space</kbd> / <kbd>Esc</kbd> shortcut shown),
-**Launch at login**, **Auto-update on launch**, and **Check for Updates…**. A
-**Grant Accessibility…** item appears only while that permission is missing.
+**Launch at login**, **Auto-update on launch**, **Hide menu-bar icon…**,
+**Check for Updates…**, and **Download page…**. A **Grant Accessibility…** item
+appears only while that permission is missing.
+
+**Hiding the icon:** TidyTab keeps running and the hotkeys keep working. The pin
+shows again during a run, so the stop hint stays visible. To bring it back, open
+TidyTab again (Applications or Spotlight). With **Launch at login** on, the icon
+stays hidden after a restart.
 
 ### How it works
 

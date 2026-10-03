@@ -89,6 +89,21 @@ python setup.py py2app
 Notarization **requires** the hardened runtime (`--options runtime`). Sign the
 whole bundle, frameworks and all (`--deep`):
 
+> ⚠️ **`--deep` alone is not enough and notarization WILL reject it.** py2app drops
+> ~78 loose `.so`/`.dylib` files in `Contents/Resources/` that `--deep` skips
+> (this rejected submission 1 of both v1.1.6 and would again). Sign those first,
+> then the embedded Python, then the bundle:
+>
+> ```bash
+> ID="Developer ID Application: Jacob Heifetz-Licht (V45QZXMDAW)"
+> find dist/TidyTab.app -type f \( -name "*.so" -o -name "*.dylib" \) \
+>   -exec codesign --force --options runtime --timestamp --sign "$ID" {} \;
+> codesign --force --options runtime --timestamp --sign "$ID" \
+>   dist/TidyTab.app/Contents/Frameworks/Python.framework/Versions/*/Python
+> codesign --deep --force --options runtime --timestamp \
+>   --entitlements entitlements.plist --sign "$ID" dist/TidyTab.app
+> ```
+
 ```bash
 codesign --deep --force --options runtime \
   --sign "Developer ID Application: <Your Name> (<TEAMID>)" \
