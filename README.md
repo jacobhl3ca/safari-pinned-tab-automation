@@ -41,18 +41,19 @@ Three commands, from the menu-bar dropdown or from anywhere via a global hotkey:
 
 | Command | Hotkey | What it does |
 | --- | --- | --- |
-| **Unpin pinned tabs** | <kbd>⌘⌥U</kbd> | Tabs stay open, just no longer pinned |
-| **Close pinned tabs** | <kbd>⌘⌥K</kbd> | Closes them outright |
-| **Pin all tabs** | <kbd>⌘⌥P</kbd> | Pins every unpinned tab in the front window |
+| **Unpin pinned tabs** | <kbd>⌥⌘U</kbd> | Tabs stay open, just no longer pinned |
+| **Close pinned tabs** | <kbd>⌥⌘K</kbd> | Closes them outright |
+| **Pin all tabs** | <kbd>⌥⌘P</kbd> | Pins every unpinned tab in the front window |
 
 It finds the relevant tabs in the **front Safari window** by itself, tells you how
-many it found, and waits for you to confirm before it touches anything. Mid-run,
+many it found, and waits for you to confirm before it touches anything. For Close,
+<kbd>Return</kbd> and <kbd>Esc</kbd> cancel; you click **Close** to go ahead. Mid-run,
 <kbd>Space</kbd>, <kbd>Esc</kbd>, or slamming the mouse into a screen corner stops
 it immediately.
 
 Also in the menu: **Stop** (with its <kbd>Space</kbd> / <kbd>Esc</kbd> shortcut shown),
-**Launch at login**, **Auto-update on launch**, **Hide menu-bar icon…**,
-**Check for Updates…**, and **Download page…**. A **Grant Accessibility…** item
+**Launch at login**, **Auto-update**, **Hide menu-bar icon…**,
+**Check for Updates…**, **Download page**, and **Quit TidyTab**. A **Grant Accessibility…** item
 appears only while that permission is missing.
 
 **Hiding the icon:** TidyTab keeps running and the hotkeys keep working. The pin

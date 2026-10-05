@@ -17,12 +17,12 @@ or `brew install --cask jacobhl3ca/tap/tidytab` — see the [repo README](../REA
 Three commands, straight from the menu bar or a global hotkey — no options to set
 first:
 
-- **Unpin pinned tabs (⌘⌥U)** — tabs stay open, just unpinned
-- **Close pinned tabs (⌘⌥K)** — closes them outright
-- **Pin all tabs (⌘⌥P)** — pins every unpinned tab in the front window
+- **Unpin pinned tabs (⌥⌘U)** — tabs stay open, just unpinned
+- **Close pinned tabs (⌥⌘K)** — closes them outright
+- **Pin all tabs (⌥⌘P)** — pins every unpinned tab in the front window
 - **Stop (Space / Esc)** — breaks the loop at the next cycle
-- Plus **Launch at login**, **Auto-update on launch**, **Check for Updates…**, and
-  **Download page…**
+- Plus **Launch at login**, **Auto-update**, **Check for Updates…**,
+  **Download page**, and **Quit TidyTab**
 - **Hide menu-bar icon…** — hides the pin; TidyTab keeps running and the hotkeys
   keep working (the pin shows during a run, for the stop hint). Open TidyTab again
   to bring it back. With Launch at login on, it stays hidden after a restart
@@ -65,7 +65,7 @@ python tidytab.py
 ```
 
 A 📌 appears in the menu bar. Pick **Unpin**, **Close**, or **Pin all** from it
-(the ⌘⌥U / ⌘⌥K / ⌘⌥P hotkeys work too).
+(the ⌥⌘U / ⌥⌘K / ⌥⌘P hotkeys work too).
 
 > In dev mode, the **terminal/Python** running the script is what needs
 > Accessibility permission (see below). When you build the `.app`, the app

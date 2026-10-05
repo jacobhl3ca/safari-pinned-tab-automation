@@ -27,7 +27,8 @@ import rumps
 import pyautogui
 from rumps.rumps import NSApp as _RumpsDelegate
 
-from AppKit import NSApplication, NSEvent, NSWorkspace
+from AppKit import (NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSAppearance,
+                    NSApplication, NSEvent, NSUserDefaults, NSWorkspace)
 from PyObjCTools.AppHelper import callAfter
 try:
     from AppKit import NSEventMaskKeyDown
@@ -47,7 +48,7 @@ from ApplicationServices import (
 
 # --- App identity (rename the app by changing this ONE constant) ---------------
 APP_NAME = "TidyTab"
-VERSION = "1.2.4"
+VERSION = "1.2.5"
 # Developer ID team. The self-updater pins downloaded builds to this, so only a
 # .app we signed can replace the running one. Must match the certificate used in
 # DISTRIBUTION.md step 2 ("Developer ID Application: … (V45QZXMDAW)").
@@ -72,13 +73,21 @@ ICON_DIM = (20, 20)         # menu-bar icon FOOTPRINT in points = rumps' own def
                             # by transparent padding baked into menubar_white.png (~70% ink, ~30% margin),
                             # so the pin's ink lands ~14pt — flush with neighbor SF-Symbol glyphs.
 
-# Menu labels for the three actions + Stop, with their shortcuts shown inline so the
-# hotkeys are discoverable from the menu itself (rumps can't set real key equivalents
-# on a status-bar menu, so the shortcut lives in the title text).
-UNPIN_TITLE = "Unpin pinned tabs  (⌘⌥U)"
-CLOSE_TITLE = "Close pinned tabs  (⌘⌥K)"
-PIN_TITLE = "Pin all tabs  (⌘⌥P)"
-STOP_TITLE = "Stop  (Space / Esc)"
+# Menu labels for the three actions + Stop. Each shortcut is a real key equivalent on
+# its item (see _with_shortcut), so macOS draws it in the menu's right-hand shortcut
+# column, lined up like any Mac menu. Shortcuts typed into the title text could never
+# line up: the menu font is proportional. The hotkeys themselves come from the global
+# monitor in _start_hotkey_monitor; a status-bar menu's key equivalents only act while
+# that menu is open.
+# The shortcut column starts after the WIDEST title in the whole menu, so every other
+# title stays short (≤ "Hide menu-bar icon…"): the version lives in the update item's
+# tooltip, not its title. Stop is gray while no run is active.
+UNPIN_TITLE = "Unpin pinned tabs"
+CLOSE_TITLE = "Close pinned tabs"
+PIN_TITLE = "Pin all tabs"
+STOP_TITLE = "Stop"
+CMD_OPT = (1 << 20) | (1 << 19)     # ⌘⌥ — the same two bits the hotkey monitor checks
+ESC_KEY = "\x1b"                    # drawn as ⎋; Space stops a run too (_start_space_monitor)
 GRANT_TITLE = "Grant Accessibility…"
 HIDE_ICON_TITLE = "Hide menu-bar icon…"
 
@@ -500,6 +509,15 @@ def _res(name):
     return os.path.join(base, name)
 
 
+def _with_shortcut(item, key, modifiers):
+    """Give a rumps item a real key equivalent, so the menu draws its shortcut in
+    the shortcut column. rumps' own `key=` always means ⌘ alone, so the modifier
+    mask goes straight onto the NSMenuItem."""
+    item._menuitem.setKeyEquivalent_(key)
+    item._menuitem.setKeyEquivalentModifierMask_(modifiers)
+    return item
+
+
 class NSApp(objc.Category(_RumpsDelegate)):
     """Opening TidyTab again while it runs (Finder, Spotlight, Launchpad) makes
     macOS send it a "reopen" event. With the menu-bar icon hidden that is the way
@@ -532,31 +550,38 @@ class TidyTabApp(rumps.App):
 
         self._login_item = rumps.MenuItem("Launch at login", callback=self._toggle_login)
         self._login_item.state = login_item_enabled()
-        self._autoupdate_item = rumps.MenuItem("Auto-update on launch", callback=self._toggle_autoupdate)
+        self._autoupdate_item = rumps.MenuItem("Auto-update", callback=self._toggle_autoupdate)
         self._autoupdate_item.state = load_prefs().get("auto_update", True)
         self._hide_icon_item = rumps.MenuItem(HIDE_ICON_TITLE, callback=self._hide_icon)
+        self._stop_item = _with_shortcut(rumps.MenuItem(STOP_TITLE, callback=self._stop), ESC_KEY, 0)
+        # The version sits in a tooltip: in the title it made this the widest row,
+        # which pushed the shortcut column far right of every action.
+        update_item = rumps.MenuItem("Check for Updates…", callback=self._check_updates)
+        update_item._menuitem.setToolTip_(f"{APP_NAME} {VERSION}")
 
         # Three explicit actions (no hidden mode) — clear what each does. Every
-        # action carries its shortcut in the label.
+        # action shows its shortcut in the menu's shortcut column.
         self.menu = [
-            rumps.MenuItem(UNPIN_TITLE, callback=self._run_unpin),
-            rumps.MenuItem(CLOSE_TITLE, callback=self._run_close),
-            rumps.MenuItem(PIN_TITLE, callback=self._run_pin),
-            rumps.MenuItem(STOP_TITLE, callback=self._stop),
+            _with_shortcut(rumps.MenuItem(UNPIN_TITLE, callback=self._run_unpin), "u", CMD_OPT),
+            _with_shortcut(rumps.MenuItem(CLOSE_TITLE, callback=self._run_close), "k", CMD_OPT),
+            _with_shortcut(rumps.MenuItem(PIN_TITLE, callback=self._run_pin), "p", CMD_OPT),
+            self._stop_item,
             None,
             self._login_item,
             self._autoupdate_item,
             self._hide_icon_item,
             None,
-            rumps.MenuItem(f"Check for Updates…  (v{VERSION})", callback=self._check_updates),
+            update_item,
             # Always-present escape hatch. A self-update can fail for reasons the
             # app cannot fix from inside (truncated download, a dmg that won't
             # mount, a signature that doesn't match) — and until v1.2.1 it failed
             # on every single run. Without this the only signal was a notification
             # saying "skipped", with nowhere to go; RELEASES_PAGE was defined and
             # never used. A user should never have to know the repo URL to recover.
-            rumps.MenuItem("Download page…", callback=self._open_releases_page),
-            rumps.MenuItem("Quit", callback=self._quit),
+            # No "…": it just opens a web page. "…" marks the items that open a
+            # dialog first (Hide menu-bar icon…, Check for Updates…).
+            rumps.MenuItem("Download page", callback=self._open_releases_page),
+            _with_shortcut(rumps.MenuItem(f"Quit {APP_NAME}", callback=self._quit), "q", 1 << 20),
         ]
 
         # "Grant Accessibility…" is setup-only: it appears just while the permission
@@ -613,9 +638,10 @@ class TidyTabApp(rumps.App):
         if self._alert(
             title="Hide the menu-bar icon?",
             message=(
-                "TidyTab keeps running and ⌘⌥U / ⌘⌥K / ⌘⌥P still work. "
+                "TidyTab keeps running and ⌥⌘U / ⌥⌘K / ⌥⌘P still work. "
                 "The icon shows during a run, so the stop hint stays visible.\n\n"
-                "To show the icon again, open TidyTab again (Applications or Spotlight)."
+                "To show the icon again, open TidyTab again (Applications or Spotlight).\n\n"
+                "To keep the icon hidden after a restart, turn on Launch at login."
             ),
             ok="Hide Icon", cancel="Cancel",
         ) == 1:
@@ -662,6 +688,47 @@ class TidyTabApp(rumps.App):
             pass
         return rumps.alert(*args, **kwargs)
 
+    def _build_destructive_alert(self, title, message, action):
+        """An NSAlert whose default button (Return) is Cancel. The action button
+        has no key equivalent, so it needs a click. rumps.alert can't do this: it
+        always makes `ok` the default."""
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_(title)
+        alert.setInformativeText_(message)
+        alert.setAlertStyle_(0)  # informational, same as rumps.alert
+        if NSUserDefaults.standardUserDefaults().stringForKey_("AppleInterfaceStyle") == "Dark":
+            alert.window().setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameVibrantDark"))
+        cancel = alert.addButtonWithTitle_("Cancel")
+        act = alert.addButtonWithTitle_(action)
+        if act.respondsToSelector_(b"setHasDestructiveAction:"):
+            act.setHasDestructiveAction_(True)
+        cancel.setKeyEquivalent_("\r")  # AppKit gives a "Cancel" button Esc; Esc still cancels
+        act.setKeyEquivalent_("")
+        return alert
+
+    def _confirm_destructive(self, title, message, action):
+        """Confirm where Return and Esc both cancel; the action needs a click.
+        Returns True only when the action button is clicked. Main thread only."""
+        try:
+            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        except Exception:
+            pass
+        alert = self._build_destructive_alert(title, message, action)
+
+        # With no button on Esc, NSAlert picks one on its own — in tests it
+        # sometimes picked the action. Map Return, Enter and Esc to Cancel here.
+        app = NSApplication.sharedApplication()
+        def on_key(event):
+            if event.keyCode() in (36, 76, 53) and app.modalWindow() == alert.window():
+                app.stopModalWithCode_(NSAlertFirstButtonReturn)
+                return None
+            return event
+        monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskKeyDown, on_key)
+        try:
+            return alert.runModal() == NSAlertSecondButtonReturn
+        finally:
+            NSEvent.removeMonitor_(monitor)
+
     def _notify(self, title, subtitle, message):
         """Post a notification from ANY thread — Cocoa UI must be touched on the
         main thread, and firing NSUserNotification off a worker thread is what
@@ -680,7 +747,7 @@ class TidyTabApp(rumps.App):
         """MAIN thread only: say why the update didn't apply and offer the page.
 
         Only shown when the user asked for the update — at launch a modal would
-        ambush them, so the auto path notifies and leaves the "Download page…"
+        ambush them, so the auto path notifies and leaves the "Download page"
         menu item as the way through.
         """
         if self._alert(APP_NAME, f"{reason}\n\nOpen the download page to install it manually?",
@@ -704,7 +771,7 @@ class TidyTabApp(rumps.App):
             self._alert(APP_NAME, "Couldn't reach GitHub to check for updates. "
                                   "Check your connection and try again.")
         elif _ver_tuple(latest) > _ver_tuple(VERSION):
-            if self._alert(APP_NAME, f"Update available: v{latest}.\nDownload and install now?",
+            if self._alert(APP_NAME, f"Update available: v{latest} (you have v{VERSION}).\nDownload and install now?",
                            ok="Update", cancel="Later") == 1:
                 # manual=True: they asked, so a failure earns a dialog with a way
                 # out rather than a notification that dead-ends.
@@ -723,7 +790,7 @@ class TidyTabApp(rumps.App):
                 return
             if load_prefs().get("update_attempted") == latest:   # tried + still behind → don't loop
                 self._notify(APP_NAME, f"Update v{latest} available",
-                             "Auto-update didn't apply — use “Download page…” to install it.")
+                             "Auto-update didn't apply — use “Download page” in the menu to install it.")
                 return
             self._do_self_update(latest)
         threading.Thread(target=work, daemon=True).start()
@@ -821,7 +888,8 @@ class TidyTabApp(rumps.App):
         )
 
     def _apply_idle(self):
-        """Restore the idle look: the white template pin, no title."""
+        """Restore the idle look: the white template pin, no title, Stop gray."""
+        self._stop_item.set_callback(None)
         self.template = self._idle_template
         self.icon = self._idle_icon
         self.title = ""
@@ -858,7 +926,7 @@ class TidyTabApp(rumps.App):
             message=(
                 "TidyTab manages all the tabs in your front Safari window in one sweep.\n\n"
                 "• Choose “Unpin pinned tabs,” “Close pinned tabs,” or “Pin all tabs”\n"
-                "• Or use ⌘⌥U (unpin) / ⌘⌥K (close) / ⌘⌥P (pin all)\n"
+                "• Or use ⌥⌘U (unpin) / ⌥⌘K (close) / ⌥⌘P (pin all)\n"
                 "• It confirms the count first; press Space, Esc, or a screen corner to stop\n\n"
                 "One-time setup: TidyTab needs Accessibility permission to control Safari. "
                 "Click “Open Settings,” switch on TidyTab under Accessibility, and you're ready."
@@ -943,13 +1011,15 @@ class TidyTabApp(rumps.App):
 
         n = len(centers)
         tabs_word = "tab" if n == 1 else "tabs"
-        ok = self._alert(
-            title=f"{op_label} {n} {target_label} {tabs_word}?",
-            message=(f"TidyTab will {op_label.lower()} {n} {target_label} {tabs_word} in "
-                     "Safari.\n\nPress Space or Esc to stop mid-run."),
-            ok=op_label, cancel="Cancel",
-        )
-        if ok != 1:
+        title = f"{op_label} {n} {target_label} {tabs_word}?"
+        message = (f"TidyTab will {op_label.lower()} {n} {target_label} {tabs_word} in "
+                   "Safari.\n\nPress Space or Esc to stop mid-run.")
+        if self._operation == "close":
+            # ⌥⌘K is global: typed by accident, Return must not close every pinned tab.
+            ok = self._confirm_destructive(title, message, op_label)
+        else:
+            ok = self._alert(title=title, message=message, ok=op_label, cancel="Cancel") == 1
+        if not ok:
             return
         self._mode = ("auto", centers)
 
@@ -970,6 +1040,7 @@ class TidyTabApp(rumps.App):
     def _begin_running_ui(self):
         self._set_icon_visible(True)    # a hidden icon shows for the run: the stop hint lives here
         self.title = "  Space/Esc to stop"
+        self._stop_item.set_callback(self._stop)
         self._start_space_monitor()
         if self._watchdog is None:
             self._watchdog = rumps.Timer(self._check_done, 0.4)
