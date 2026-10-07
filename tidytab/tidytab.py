@@ -28,7 +28,8 @@ import pyautogui
 from rumps.rumps import NSApp as _RumpsDelegate
 
 from AppKit import (NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSAppearance,
-                    NSApplication, NSEvent, NSUserDefaults, NSWorkspace)
+                    NSApplication, NSEvent, NSModalPanelRunLoopMode, NSRunLoop, NSTimer,
+                    NSUserDefaults, NSWorkspace)
 from PyObjCTools.AppHelper import callAfter
 try:
     from AppKit import NSEventMaskKeyDown
@@ -48,7 +49,7 @@ from ApplicationServices import (
 
 # --- App identity (rename the app by changing this ONE constant) ---------------
 APP_NAME = "TidyTab"
-VERSION = "1.2.5"
+VERSION = "1.2.6"
 # Developer ID team. The self-updater pins downloaded builds to this, so only a
 # .app we signed can replace the running one. Must match the certificate used in
 # DISTRIBUTION.md step 2 ("Developer ID Application: … (V45QZXMDAW)").
@@ -141,6 +142,23 @@ def activate_safari():
         pass
 
 
+def _on_screen_safari_bounds():
+    """Bounds dict (X, Y, Width, Height) of the front Safari window on the CURRENT
+    Space, or None. Raises on an inspection error; callers pick the safe default."""
+    from Quartz import (
+        CGWindowListCopyWindowInfo,
+        kCGWindowListOptionOnScreenOnly,
+        kCGNullWindowID,
+    )
+    wins = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID) or []
+    for w in wins:   # front to back
+        if w.get("kCGWindowOwnerName") == "Safari" and w.get("kCGWindowLayer", 0) == 0:
+            b = w.get("kCGWindowBounds", {})
+            if b.get("Height", 0) > 120:   # a real browser window, not a tiny element
+                return b
+    return None
+
+
 def safari_window_on_screen():
     """True iff Safari has a real window on the CURRENT Space (on-screen).
 
@@ -148,20 +166,41 @@ def safari_window_on_screen():
     on a Mission Control pref), so we refuse to click rather than click blindly.
     """
     try:
-        from Quartz import (
-            CGWindowListCopyWindowInfo,
-            kCGWindowListOptionOnScreenOnly,
-            kCGNullWindowID,
-        )
-        wins = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID) or []
-        for w in wins:
-            if w.get("kCGWindowOwnerName") == "Safari" and w.get("kCGWindowLayer", 0) == 0:
-                b = w.get("kCGWindowBounds", {})
-                if b.get("Height", 0) > 120:   # a real browser window, not a tiny element
-                    return True
-        return False
+        return _on_screen_safari_bounds() is not None
     except Exception:
         return True   # never block on an inspection error
+
+
+def raise_safari_window_here():
+    """Bring forward the Safari window on the CURRENT Space and activate Safari
+    without the Dock click, so macOS does not jump to the Space of Safari's
+    most-recent window. Returns False when this Space has no Safari window (or AX
+    can't match it); the caller then falls back to activate_safari()."""
+    try:
+        bounds = _on_screen_safari_bounds()
+        pid = _safari_pid()
+        if not bounds or pid is None:
+            return False
+        from ApplicationServices import AXUIElementPerformAction
+        from AppKit import NSRunningApplication
+        want = (bounds.get("X", 0), bounds.get("Y", 0),
+                bounds.get("Width", 0), bounds.get("Height", 0))
+        for win in (_ax_attr(AXUIElementCreateApplication(pid), "AXWindows") or []):
+            pos = _ax_point(_ax_attr(win, "AXPosition"))
+            size = _ax_size(_ax_attr(win, "AXSize"))
+            if not pos or not size:
+                continue
+            if all(abs(a - b) <= 2 for a, b in zip(pos + size, want)):
+                if AXUIElementPerformAction(win, "AXRaise") != 0:
+                    return False
+                running = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+                if running is None:
+                    return False
+                running.activateWithOptions_(1 << 1)   # NSApplicationActivateIgnoringOtherApps
+                return True
+        return False
+    except Exception:
+        return False
 
 
 # --- Launch at login (via a LaunchAgent plist) ---------------------------------
@@ -518,6 +557,55 @@ def _with_shortcut(item, key, modifiers):
     return item
 
 
+def _build_alert(title, message, buttons):
+    """An informational NSAlert built the way rumps.alert builds one (dark
+    appearance in Dark Mode), with `buttons` added in order."""
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_("" if title is None else str(title))
+    alert.setInformativeText_(str(message))
+    alert.setAlertStyle_(0)  # informational, same as rumps.alert
+    if NSUserDefaults.standardUserDefaults().stringForKey_("AppleInterfaceStyle") == "Dark":
+        alert.window().setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameVibrantDark"))
+    for b in buttons:
+        alert.addButtonWithTitle_(b)
+    return alert
+
+
+KEY_RETRY_INTERVAL = 0.15   # seconds between "is the alert still key?" checks
+KEY_RETRY_FIRES = 8         # ~1.2 s: covers a late Safari activation after a Space switch
+
+
+def _run_modal_key(alert):
+    """alert.runModal(), but the alert is the key window. An activation that lands
+    after ours (Safari finishing a Space switch) leaves the modal on screen but not
+    key: the default button draws gray and Return goes to the other app. A timer
+    in the modal run loop takes key back whenever it is lost in the first ~1.2 s."""
+    app = NSApplication.sharedApplication()
+    def make_key():
+        try:
+            app.activateIgnoringOtherApps_(True)
+            alert.window().makeKeyAndOrderFront_(None)
+        except Exception:
+            pass
+    try:
+        app.activateIgnoringOtherApps_(True)
+    except Exception:
+        pass
+    fires = [0]
+    def check(timer):
+        fires[0] += 1
+        if not alert.window().isKeyWindow():
+            make_key()
+        if fires[0] >= KEY_RETRY_FIRES:
+            timer.invalidate()
+    timer = NSTimer.timerWithTimeInterval_repeats_block_(KEY_RETRY_INTERVAL, True, check)
+    NSRunLoop.currentRunLoop().addTimer_forMode_(timer, NSModalPanelRunLoopMode)
+    try:
+        return alert.runModal()
+    finally:
+        timer.invalidate()
+
+
 class NSApp(objc.Category(_RumpsDelegate)):
     """Opening TidyTab again while it runs (Finder, Spotlight, Launchpad) makes
     macOS send it a "reopen" event. With the menu-bar icon hidden that is the way
@@ -673,33 +761,31 @@ class TidyTabApp(rumps.App):
             pass
 
     # ---- main-thread UI helpers -------------------------------------------- #
-    def _alert(self, *args, **kwargs):
-        """rumps.alert, but activate the app first.
+    def _alert(self, title=None, message="", ok=None, cancel=None):
+        """Same contract as rumps.alert (1 = ok, 0 = cancel), but the dialog is
+        always the key window, so `ok` draws blue and takes Return.
 
         TidyTab is LSUIElement (no Dock icon), so its windows do NOT come forward
-        on their own: an un-activated modal draws in the background app state —
-        it animates in sluggishly, redraws lazily and swallows the first click.
-        Activating first makes every dialog a normal, snappy, key window.
+        on their own, and Safari activating a beat late (a Space switch) took key
+        away from the 1.2.5 dialog: gray button, Return went to Safari.
+        _run_modal_key activates first and takes key back for the first ~1.2 s.
         Must be called on the MAIN thread.
         """
-        try:
-            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-        except Exception:
-            pass
-        return rumps.alert(*args, **kwargs)
+        buttons = [ok or "OK"]
+        if cancel:
+            buttons.append(cancel if isinstance(cancel, str) else "Cancel")
+        alert = _build_alert(title, message, buttons)
+        btns = alert.buttons()
+        btns[0].setKeyEquivalent_("\r")
+        if len(btns) > 1:
+            btns[1].setKeyEquivalent_("\x1b")
+        return 1 if _run_modal_key(alert) == NSAlertFirstButtonReturn else 0
 
     def _build_destructive_alert(self, title, message, action):
         """An NSAlert whose default button (Return) is Cancel. The action button
-        has no key equivalent, so it needs a click. rumps.alert can't do this: it
-        always makes `ok` the default."""
-        alert = NSAlert.alloc().init()
-        alert.setMessageText_(title)
-        alert.setInformativeText_(message)
-        alert.setAlertStyle_(0)  # informational, same as rumps.alert
-        if NSUserDefaults.standardUserDefaults().stringForKey_("AppleInterfaceStyle") == "Dark":
-            alert.window().setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameVibrantDark"))
-        cancel = alert.addButtonWithTitle_("Cancel")
-        act = alert.addButtonWithTitle_(action)
+        has no key equivalent, so it needs a click."""
+        alert = _build_alert(title, message, ["Cancel", action])
+        cancel, act = alert.buttons()
         if act.respondsToSelector_(b"setHasDestructiveAction:"):
             act.setHasDestructiveAction_(True)
         cancel.setKeyEquivalent_("\r")  # AppKit gives a "Cancel" button Esc; Esc still cancels
@@ -709,10 +795,6 @@ class TidyTabApp(rumps.App):
     def _confirm_destructive(self, title, message, action):
         """Confirm where Return and Esc both cancel; the action needs a click.
         Returns True only when the action button is clicked. Main thread only."""
-        try:
-            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-        except Exception:
-            pass
         alert = self._build_destructive_alert(title, message, action)
 
         # With no button on Esc, NSAlert picks one on its own — in tests it
@@ -725,7 +807,7 @@ class TidyTabApp(rumps.App):
             return event
         monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskKeyDown, on_key)
         try:
-            return alert.runModal() == NSAlertSecondButtonReturn
+            return _run_modal_key(alert) == NSAlertSecondButtonReturn
         finally:
             NSEvent.removeMonitor_(monitor)
 
@@ -973,9 +1055,11 @@ class TidyTabApp(rumps.App):
                         "Safari isn't running. Open Safari with some pinned tabs, then try again.")
             return
 
-        # Bring Safari to the front first (handles it being on another Space) so we
-        # never click into the wrong app, then detect its pinned tabs.
-        activate_safari()
+        # Bring Safari to the front first so we never click into the wrong app, then
+        # detect its pinned tabs. A Safari window on THIS desktop wins; only with none
+        # here do we let macOS go to Safari's Space.
+        if not raise_safari_window_here():
+            activate_safari()
         time.sleep(0.7)
 
         # If Safari is on a DIFFERENT Space and macOS didn't switch to it, its window
@@ -1112,8 +1196,10 @@ class TidyTabApp(rumps.App):
         operation = self._operation
         target_label = "unpinned" if operation == "pin" else "pinned"
         try:
-            # The confirm dialog stole focus — bring Safari back before clicking.
-            activate_safari()
+            # The confirm dialog stole focus — bring Safari back before clicking,
+            # on the same desktop the confirm was on.
+            if not raise_safari_window_here():
+                activate_safari()
             time.sleep(0.5)
             done = 0
             expected = len(centers)

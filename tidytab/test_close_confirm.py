@@ -1,6 +1,6 @@
 """Close-confirm checks: Return and Esc both cancel the "Close N pinned tabs?"
-prompt, and only a click on Close runs it. Unpin and Pin keep the rumps.alert
-path. The Hide alert has the Launch-at-login line.
+prompt, and only a click on Close runs it. Unpin and Pin use _alert (Return =
+the action). _start stays on this desktop when it has a Safari window. The Hide alert has the Launch-at-login line.
 
 Key proof is in process: a timer posts a synthetic keyDown into the app's own
 event queue while the real NSAlert is modal. Each dialog is up for under 1 s.
@@ -80,8 +80,11 @@ r, to = run_with(lambda alert: alert.buttons()[1].performClick_(None))
 check(f"click Close -> True (result {r}, timeout {to})", r is True and not to)
 
 # 3. _start routing
+activated, raised_here = [], [True]
 for name, val in [("accessibility_trusted", lambda: True), ("_safari_pid", lambda: 1),
-                  ("activate_safari", lambda: None), ("safari_window_on_screen", lambda: True),
+                  ("activate_safari", lambda: activated.append(1)),
+                  ("raise_safari_window_here", lambda: raised_here[0]),
+                  ("safari_window_on_screen", lambda: True),
                   ("find_pinned_tab_centers", lambda: [(1, 1), (2, 2)]),
                   ("find_unpinned_tab_centers", lambda: [(1, 1)])]:
     setattr(tidytab, name, val)
@@ -112,6 +115,15 @@ check(f"unpin uses _alert {[c[0] for c in calls]}", [c[0] for c in calls] == ["a
       and calls[0][1]["ok"] == "Unpin")
 calls, w = start("pin", True, alert_ret=0)
 check(f"pin + Cancel uses _alert, no run {[c[0] for c in calls]}", [c[0] for c in calls] == ["alert"] and w is None)
+
+# 3b. desktop: a Safari window here -> no Dock-click activate; none here -> fallback
+activated.clear(); raised_here[0] = True
+start("pin", True, alert_ret=0)
+check(f"Safari window on this desktop: activate_safari not called ({len(activated)})", activated == [])
+activated.clear(); raised_here[0] = False
+start("pin", True, alert_ret=0)
+check(f"no Safari window here: activate_safari called ({len(activated)})", activated == [1])
+raised_here[0] = True
 
 # 4. Hide alert line + shortcut order
 seen = {}
